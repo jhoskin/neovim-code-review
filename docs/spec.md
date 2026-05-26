@@ -827,3 +827,84 @@ shall exit with code 1 and print a diagnostic to stderr.
 | REQ-ERR-0006  | TST-ERR-0006  | Auto     | Mock `vim.version()` to return 0.9, verify exit code 1 and version diagnostic |
 | REQ-ERR-0007  | TST-ERR-0007  | Auto     | Invoke with nonexistent branch name, verify exit code 1 and diagnostic naming the revision |
 | REQ-ERR-0008  | TST-ERR-0008  | Auto     | Invoke with stdin redirected from /dev/null, verify exit code 1 |
+
+## 8. Acceptance Criteria
+
+The system is accepted when all of the following hold.
+
+### 8.1 End-to-end scenarios
+
+Each scenario must pass without modification to the test steps.
+
+**AC-E2E-01: Agent review cycle (commit range)**
+
+1. Create a test repo with at least 3 commits.
+2. Run `NVIM_CODE_REVIEW_RESULT=$(mktemp) nvim -c 'CodeReview HEAD~2..HEAD'`.
+3. In the diff view, add a line comment on a changed line and a file comment.
+4. Set a verdict.
+5. Submit via `:CodeReviewSubmit`.
+6. Verify: exit code is 0, result file contains a ref starting with
+   `refs/reviews/`, `git show <ref>:review.json` returns valid JSON with the
+   comment text, correct line numbers, and a non-null verdict.
+
+**AC-E2E-02: Agent review cycle (working tree)**
+
+1. In a git repo, modify a tracked file without staging.
+2. Run `NVIM_CODE_REVIEW_RESULT=$(mktemp) nvim -c 'CodeReview'`.
+3. Add a line comment.
+4. Submit.
+5. Verify: exit code 0, `review.json` has `diff_spec.type` of `working_tree`,
+   `diff_spec.base` contains the resolved HEAD SHA, `diff_spec.head` is null.
+
+**AC-E2E-03: Empty review (no comments)**
+
+1. Run `NVIM_CODE_REVIEW_RESULT=$(mktemp) nvim -c 'CodeReview HEAD~1..HEAD'`.
+2. Submit without adding any comments or verdict.
+3. Verify: exit code 0, result file contains a ref, `review.json` has an empty
+   `files` array and null `verdict`.
+
+**AC-E2E-04: User cancellation**
+
+1. Run `NVIM_CODE_REVIEW_RESULT=$(mktemp) nvim -c 'CodeReview HEAD~1..HEAD'`.
+2. Add a comment, then quit with `:qa!` without submitting.
+3. Verify: exit code is 2, result file is empty or absent, no new ref exists
+   under `refs/reviews/`.
+
+**AC-E2E-05: Error on bad input**
+
+1. Run `NVIM_CODE_REVIEW_RESULT=$(mktemp) nvim -c 'CodeReview nonexistent..HEAD'`.
+2. Verify: exit code is 1, stderr contains a diagnostic naming the unresolvable
+   revision, no ref is created.
+
+**AC-E2E-06: Review JSON is self-contained**
+
+1. Complete a review on a commit range.
+2. Read the review using only `git cat-file blob <ref>:review.json`.
+3. Without the plugin installed, parse the JSON and extract: the diff type,
+   base and head SHAs, all file paths, all line numbers, all comment bodies,
+   and the verdict.
+4. Verify: every field required by the schema in section 3.2 is present and
+   parseable. No field requires the plugin or Neovim to interpret.
+
+### 8.2 Quality gates
+
+All gates must pass before a version is tagged.
+
+| Gate | Criterion |
+|------|-----------|
+| Unit tests | All automated tests in the verification matrix (TST-*) pass |
+| Manual tests | All manual tests in the verification matrix executed and recorded as pass |
+| Schema validation | `review.json` output validates against `schema/review.v1.json` for every end-to-end scenario |
+| Dependency check | Plugin loads and reports a clear error when diffview.nvim is absent, Neovim < 0.10, or git is missing |
+| Idempotent reads | `git cat-file blob <ref>:review.json` returns identical JSON on repeated reads |
+| No data loss | Comments entered in the UI appear in the persisted JSON without truncation or encoding errors |
+| Exit code contract | Exit codes match section 5.2 for all three paths (submit, cancel, error) |
+
+### 8.3 Out-of-scope for acceptance
+
+These are not acceptance criteria and should not block a release:
+
+- Performance benchmarks (the tool is interactive; human review speed dominates)
+- Multi-platform testing beyond the developer's primary OS
+- Compatibility with Neovim nightly builds ahead of the version floor
+- Review listing, search, or cleanup commands (section 3.4 documents manual cleanup)
