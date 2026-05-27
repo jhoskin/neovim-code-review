@@ -10,20 +10,20 @@ Date: 2026-05-26
 A local code review tool for reviewing LLM coding agent output inside Neovim.
 A coding agent launches Neovim into a diff view. The reviewer adds comments on
 diff lines, files, or the review as a whole. On exit, the review is persisted as
-a custom git ref containing JSON. The agent reads the ref and acts on the
-feedback.
+a JSON file in a local audit trail directory. The agent reads the file and
+acts on the feedback.
 
 ### 1.2 Scope
 
 - Display diffs for working tree, branch, or commit range
 - Line-level, file-level, and review-level comments
-- Persist reviews as git refs in the local repository
+- Persist reviews as JSON files in a local audit trail directory
 - Blocking CLI interface for agent invocation
-- JSON output readable by any tool that can call `git`
+- JSON output readable by any tool that can read a file
 
 ### 1.3 Non-goals
 
-- Remote sync (no push to GitHub, Gerrit, or any server)
+- Git ref storage (reviews are stored as files, not git objects)
 - Comment threading or replies
 - Structured approval workflow (no approve/reject/merge)
 - Multi-round review sessions (each session is independent)
@@ -47,14 +47,14 @@ feedback.
 │  │              │                           │
 │  │  ┌────────────────────────────────┐      │
 │  │  │ storage layer                  │      │
-│  │  │ (vim.system → git CLI)         │      │
+│  │  │ (file I/O)                     │      │
 │  │  └────────────────────────────────┘      │
 │  └──────────────┘                           │
 └─────────────────────────────────────────────┘
                     │
                     ▼
-          .git/refs/reviews/<id>
-          (commit → tree → review.json)
+  ~/.local/share/nvim/code-review/<project>/
+  (review JSON files)
 ```
 
 ### 2.1 Dependencies
@@ -63,7 +63,7 @@ feedback.
 |---------------|-----------|--------------------------------|
 | Neovim        | >= 0.10   | `vim.system()` (added in 0.10), `sign_text` in extmarks (added in 0.10), `nvim_buf_set_extmark` with `virt_lines` (added in 0.8). The binding floor is `vim.system()`. |
 | diffview.nvim | latest    | Diff rendering ([dlyongemallo/diffview.nvim](https://github.com/dlyongemallo/diffview.nvim)). Required because upstream sindrets/diffview.nvim is archived. If upstream revives or a community fork supersedes this one, switch to it. |
-| git           | >= 2.30   | Plumbing commands (`hash-object`, `mktree`, `commit-tree`, `update-ref`, `for-each-ref`). All plumbing commands used are available since git 1.x; the 2.30 floor may be lowerable. |
+| git           | >= 2.30   | Read-only operations (`git diff`, `git rev-parse`, `git merge-base`). All commands used are available since git 1.x; the 2.30 floor may be lowerable. |
 
 ### 2.2 Data flow
 
@@ -74,99 +74,60 @@ feedback.
    `:DiffviewOpen <base>...<head>`. For a single commit:
    `:DiffviewOpen <commit>^..<commit>`.
    Side detection and file path resolution use diffview's Lua API (see
-   section 4.4 and 4.8 for details and stability contract).
+   section 4.4 and 4.10 for details and stability contract).
 3. User navigates diffs, adds comments via keybindings
 4. Comments are held in memory and rendered as extmarks
 5. User finishes review (`:CodeReviewSubmit` or summary confirmation). If the
    user quits Neovim without submitting (`:q`, `:qa`, `ZQ`), no review is
    persisted and the exit code is 2.
 6. Plugin serializes review to JSON
-7. Plugin writes JSON blob to git object store, builds commit, creates ref
-8. Plugin writes ref name to the result file (see section 5.2), exits Neovim
+7. Plugin writes review JSON to audit trail directory
+8. Plugin writes the audit trail file path to the result file (see section
+   5.2), exits Neovim
 
-The storage layer calls git plumbing commands via `vim.system()` (Neovim
-\>= 0.10). Each call may be synchronous (`:wait()`) since the plumbing
-commands complete in milliseconds and run only at submission time. Errors at
-any step abort the sequence and trigger the error exit path (REQ-ERR-0004).
+The plugin calls `vim.system()` (Neovim >= 0.10) for read-only git
+operations: `git diff`, `git rev-parse`, and `git merge-base`. These run
+during range parsing and diff display. The storage layer uses Lua file I/O
+(`io.open`, `vim.fn.mkdir`) to write review JSON at submission time.
 
 ## 3. Data Model
 
-### 3.1 Git ref structure
+### 3.1 File storage
 
-Each review is stored as a commit under the `refs/reviews/` namespace.
+Reviews are stored as JSON files in the audit trail directory.
 
-**Ref naming**: `refs/reviews/<id>` where `<id>` has the format
-`YYYYMMDDTHHMMSS-<8-char-commit-sha>`. The timestamp component is UTC. The
-ref name is written after the commit is created, so the commit SHA is known at
-that point. Inside `review.json`, the `id` field stores only the timestamp
-portion (`YYYYMMDDTHHMMSS`), because the commit SHA cannot be embedded inside
-its own content (hash cycle). The ref name is the authoritative identifier; the
-JSON `id` is for correlation.
+**Audit trail directory**: `~/.local/share/nvim/code-review/<project-hash>/`
+where `<project-hash>` is the first 8 characters of the SHA-256 hash of
+the git repository root path. This prevents collisions between projects
+with the same name.
 
-**Transfer behavior**: `git clone` and `git fetch` transfer only
-`refs/heads/*` and `refs/tags/*` by default. Reviews stored under
-`refs/reviews/*` will not appear in clones unless the remote's fetch refspec
-is configured (e.g., `+refs/reviews/*:refs/reviews/*`). This is consistent
-with the non-goal of remote sync (section 1.3).
+**Review files**: `<timestamp>.json` where timestamp is `YYYYMMDDTHHMMSS`
+(UTC). Each submitted review creates one file. The plugin never deletes
+these files.
 
-**Commit topology**:
+**Session files**: `sessions/<session-id>.json` stores in-progress review
+state for pause/resume. Session files are deleted when the session is
+submitted or explicitly discarded.
+
+**Directory structure**:
 
 ```text
-refs/reviews/20260526T143000-a1b2c3d4
-  │
-  ▼
-commit (review commit)
-  ├── parent: single parent (see rules below)
-  └── tree
-       └── review.json (blob)
+~/.local/share/nvim/code-review/
+  └── a1b2c3d4/                    (project hash)
+      ├── 20260526T143000.json     (completed review)
+      ├── 20260526T150000.json     (completed review)
+      └── sessions/
+          └── abc123.json          (paused session)
 ```
 
-The review commit has exactly one parent:
+**Result file**: On submit, the plugin writes the full path of the saved
+review JSON to the result file. The result file path comes from
+`$NVIM_CODE_REVIEW_RESULT` (or `$TMPDIR/nvim-code-review-result` if
+unset). The result file contains a single line: the absolute path to the
+review JSON file, with no trailing newline.
 
-- **Single-commit review** (`CodeReview abc1234`): the reviewed commit.
-- **Range review** (`CodeReview A..B`): commit B (the tip of the range). The
-  base A is recorded in `diff_spec.base`.
-- **Three-dot review** (`CodeReview A...B`): commit B. The merge-base is
-  recorded in `diff_spec.base`.
-- **Working-tree review** (`CodeReview` with no args): HEAD at the time of
-  review.
-
-**Reachability and garbage collection**: Because the review commit lists the
-reviewed commit as a parent, that commit (and its ancestors) is reachable from
-the review ref. `git gc` will not prune it. This is intentional: the reviewed
-code should not disappear while the review exists. To release pinned objects,
-delete the review ref with `git update-ref -d refs/reviews/<id>` before
-running `git gc`.
-
-**Creation sequence** (git plumbing):
-
-```bash
-# review.json is assembled in memory; id contains only the timestamp
-review_json='{"version":1,"id":"20260526T143000",...}'
-blob_sha=$(printf '%s' "$review_json" | git hash-object -w --stdin)
-tree_sha=$(printf "100644 blob %s\treview.json\n" "$blob_sha" | git mktree)
-commit_sha=$(git commit-tree "$tree_sha" -p "$parent_commit" \
-  -m "code-review: 20260526T143000-${commit_sha_placeholder}")
-git update-ref "refs/reviews/20260526T143000-${commit_sha:0:8}" "$commit_sha"
-```
-
-In the Lua implementation, the plugin uses `vim.system()` with `--stdin` to
-pipe the JSON, then writes the ref using the first 8 characters of the
-resulting commit SHA.
-
-The commit message format is `code-review: <review-id>`. Including the review
-ID makes `git log refs/reviews/` output informative without reading each blob.
-
-The author and committer fields are populated from the user's git config
-(`user.name`, `user.email`). The plugin does not override these.
-
-**Failure modes**: The four commands are not atomic. If the process fails
-between `commit-tree` and `update-ref`, the blob, tree, and commit objects
-exist but are unreferenced. They will be pruned by the next `git gc`.
-No ref is created, so no review is recorded. The plugin treats `update-ref`
-as the commit point: if it succeeds, the review exists; if any preceding
-step fails, the plugin reports the error and does not attempt subsequent
-steps. The system does not roll back partial object writes.
+**Reading a review**: Any tool can read a review by parsing the JSON file
+directly. No git commands or plugin installation required.
 
 ### 3.2 review.json schema
 
@@ -210,7 +171,7 @@ The example and field table below are informational.
 | Field | Type | Required | Description |
 |---|---|---|---|
 | `version` | integer | yes | Schema version, currently `1`. Consumers that encounter an unsupported version shall treat the review as unreadable and report the mismatch. New versions may add fields but will not remove or change semantics of existing fields (additive-only within a major version). Consumers shall ignore unknown fields (forward compatibility). |
-| `id` | string | yes | Timestamp portion of the review ID (`YYYYMMDDTHHMMSS`). The full ref name appends `-<8-char-commit-sha>` (see section 3.1). |
+| `id` | string | yes | Review ID in the format `YYYYMMDDTHHMMSS` (UTC timestamp). Matches the filename stem in the audit trail directory (see section 3.1). |
 | `created_at` | string (ISO 8601) | yes | UTC timestamp with second precision, always suffixed with `Z` (e.g., `2026-05-26T14:30:00Z`). No fractional seconds. No timezone offset other than `Z`. |
 | `diff_spec.type` | enum | yes | One of `commit_range`, `branch`, `working_tree` |
 | `diff_spec.base` | string or null | yes | Full 40-character SHA of the base commit, resolved at review time. See diff_spec table below. |
@@ -258,63 +219,41 @@ created with `verdict` null and `files` as an empty array. This signals
 
 ### 3.3 Reading a review
 
-Any tool can read a review with standard git commands:
+Any tool can read a review by parsing the JSON file at its audit trail
+path:
 
 ```bash
-# Porcelain (human-readable, applies pager and formatting):
-git show refs/reviews/20260526T143000-a1b2c3d4:review.json
-
-# Plumbing (machine-readable, no formatting):
-git cat-file blob refs/reviews/20260526T143000-a1b2c3d4:review.json
+cat ~/.local/share/nvim/code-review/a1b2c3d4/20260526T143000.json | jq .
 ```
 
-Agents and scripts should prefer `git cat-file blob` for programmatic access.
-`git show` may apply pager settings and add headers in some configurations.
-
-List all reviews:
+List all reviews for a project:
 
 ```bash
-git for-each-ref refs/reviews/ --format='%(refname) %(creatordate:iso)' --sort=-creatordate
+ls ~/.local/share/nvim/code-review/a1b2c3d4/*.json
 ```
 
-To extract just the review ID from the ref name, use `%(refname:strip=2)`
-which deterministically removes the first two path components
-(`refs/reviews/`).
-
-**Agent query pattern**: To find reviews whose parent is a specific commit:
+The agent reads the result file after neovim exits:
 
 ```bash
-target=abc1234
-git for-each-ref refs/reviews/ --format='%(refname)' |
-  while read ref; do
-    parent=$(git log -1 --format='%P' "$ref")
-    case "$parent" in *"$target"*) echo "$ref" ;; esac
-  done
+review_path=$(cat "$NVIM_CODE_REVIEW_RESULT")
+cat "$review_path" | jq .
 ```
 
-For repositories with many reviews, read the `diff_spec` from each
-`review.json` instead, which stores the base and head revisions explicitly.
+### 3.4 Audit trail management
 
-### 3.4 Ref lifecycle
-
-Review refs accumulate over time. The plugin does not delete refs
-automatically.
-
-Delete a single review:
+Review files accumulate in the audit trail directory. The plugin does not
+delete them automatically. To remove old reviews:
 
 ```bash
-git update-ref -d refs/reviews/<id>
+# Delete reviews older than 30 days
+find ~/.local/share/nvim/code-review/ -name "*.json" -mtime +30 -delete
 ```
 
-Delete all reviews:
+To delete all reviews for a project:
 
 ```bash
-git for-each-ref refs/reviews/ --format='%(refname)' |
-  while read ref; do git update-ref -d "$ref"; done
+rm -rf ~/.local/share/nvim/code-review/<project-hash>/
 ```
-
-After deleting refs, run `git gc` to reclaim storage from unreferenced
-objects.
 
 ## 4. User Interface Spec
 
@@ -535,12 +474,72 @@ user confirms, the review is saved. The command is removed when no review
 session is active. It is equivalent to pressing the summary keybinding
 (`<leader>cs`).
 
-### 4.7 Quit interception
+### 4.7 `:CodeReviewCopy` command
+
+`:CodeReviewCopy` exports the current review as GitHub-flavored Markdown to
+the system clipboard. Available during an active review session (before or
+after submission). The markdown format:
+
+````markdown
+# Code Review: <range>
+
+- Base: `<base-sha>`
+- Compare: `<head-sha>`
+- Date: YYYY-MM-DD HH:MM:SS
+- Files with comments: N/M
+
+## src/example.lua (Modified)
+
+### Line 42 (new)
+
+```diff
+@@ -40,7 +40,9 @@
+ context line
++added line
+```
+
+**Comment:** The comment text here.
+
+---
+
+## Summary
+
+- Total comments: N
+- Verdict: <verdict text or "None">
+````
+
+### 4.8 Session management
+
+**`:CodeReviewPause`**: Saves the current review session state and closes
+the diffview UI. The session is stored at
+`~/.local/share/nvim/code-review/<project-hash>/sessions/<session-id>.json`.
+Neovim does not exit. The user returns to their normal editing session.
+
+Session state includes:
+
+- All comments (line, file, verdict)
+- The diff range (type, base, head)
+- The list of files with comments
+- Timestamp of creation and last modification
+
+**`:CodeReviewSessions`**: Lists saved sessions for the current project in
+a floating window. Each entry shows the diff range, comment count, and
+last modified date. Selecting an entry resumes the session: opens diffview
+with the same range, restores all comments and extmarks.
+
+**Session lifecycle**:
+
+- Created: when `:CodeReviewPause` is called
+- Resumed: when selected from `:CodeReviewSessions`
+- Deleted: when the resumed session is submitted via `:CodeReviewSubmit`
+- A session can be resumed and paused multiple times
+
+### 4.9 Quit interception
 
 When the user executes `:q`, `:qa`, or `ZQ`, the plugin intercepts the quit
 via a `QuitPre` autocmd. If there are unsaved comments, the plugin shows the
 summary screen (SCR-SUMMARY-01) for confirmation. If the user cancels the
-summary and quits again, no review ref is created and Neovim exits with code 2.
+summary and quits again, no review file is created and Neovim exits with code 2.
 
 The plugin does not prevent quitting. A quit without submitting is treated as
 cancellation, not as an empty review.
@@ -549,7 +548,7 @@ cancellation, not as an empty review.
 appeared at review time. Subsequent edits to the working tree are not
 reflected in the stored `diff_hunk` context.
 
-### 4.8 Diffview API dependency
+### 4.10 Diffview API dependency
 
 The plugin accesses diffview's Lua modules directly:
 
@@ -608,29 +607,30 @@ diagnostic (see REQ-ERR-0001, REQ-ERR-0007).
 
 ### 5.2 Exit behavior
 
-The plugin writes the ref name to a result file rather than stdout, since
-Neovim uses stdout for terminal rendering.
+The plugin writes the review file path to a result file rather than stdout,
+since Neovim uses stdout for terminal rendering.
 
-**Result file**: The plugin writes the ref name to the path specified by the
-`$NVIM_CODE_REVIEW_RESULT` environment variable. If the variable is unset,
-the plugin writes to `$TMPDIR/nvim-code-review-result` (or
-`/tmp/nvim-code-review-result` if `$TMPDIR` is unset). The file contains the
-full ref name as a single line, with no trailing newline.
+**Result file**: The plugin writes the audit trail file path to the path
+specified by the `$NVIM_CODE_REVIEW_RESULT` environment variable. If the
+variable is unset, the plugin writes to `$TMPDIR/nvim-code-review-result`
+(or `/tmp/nvim-code-review-result` if `$TMPDIR` is unset). The file
+contains the absolute path to the review JSON file as a single line, with
+no trailing newline.
 
 **Normal exit** (review submitted, with or without comments):
 
-- Write the ref name to the result file
+- Write the review file path to the result file
 - Exit code: 0
 
 **Empty review exit** (user submitted review without comments):
 
-- A ref is still created (empty review, see section 3.2)
-- Write the ref name to the result file
+- A review file is still created (empty review, see section 3.2)
+- Write the review file path to the result file
 - Exit code: 0
 
 **Cancelled exit** (user quit without submitting, e.g., `:q!`, `:qa`, `ZQ`):
 
-- No ref is created
+- No review file is created
 - Result file is not written (or is empty)
 - Exit code: 2
 
@@ -641,16 +641,16 @@ full ref name as a single line, with no trailing newline.
   where `<error-type>` is one of: `invalid_range`, `no_git`, `not_a_repo`,
   `no_diffview`, `version_error`, `storage_error`, `plugin_error`
 - Exit code: 1
-- No ref is created
+- No review file is created
 - Result file is not written
 
 An API consumer can distinguish the three outcomes:
 
-| Exit code | Result file  | Meaning |
-|-----------|--------------|---------|
-| 0         | has ref      | Review submitted (may be empty; check `files` array) |
-| 2         | empty/absent | User cancelled without submitting |
-| 1         | empty/absent | Error occurred |
+| Exit code | Result file      | Meaning |
+|-----------|------------------|---------|
+| 0         | has file path    | Review submitted (may be empty; check `files` array) |
+| 2         | empty/absent     | User cancelled without submitting |
+| 1         | empty/absent     | Error occurred |
 
 Consumers that need to distinguish error categories should parse the
 `<error-type>` token. The human-readable message is not stable across
@@ -663,11 +663,11 @@ export NVIM_CODE_REVIEW_RESULT=$(mktemp)
 nvim -c 'CodeReview HEAD~3..HEAD' 2>/tmp/nvim-review-err.log
 exit_code=$?
 if [ $exit_code -eq 0 ]; then
-  ref=$(cat "$NVIM_CODE_REVIEW_RESULT")
-  review=$(git cat-file blob "$ref:review.json")
+  review_path=$(cat "$NVIM_CODE_REVIEW_RESULT")
+  review=$(cat "$review_path")
   # parse $review as JSON and act on feedback
-elif [ $exit_code -eq 1 ]; then
-  cat /tmp/nvim-review-err.log >&2
+elif [ $exit_code -eq 2 ]; then
+  echo "Review cancelled by user"
 fi
 rm -f "$NVIM_CODE_REVIEW_RESULT" /tmp/nvim-review-err.log
 ```
@@ -752,56 +752,51 @@ text, and on confirmation replace the existing comment.
 float with an empty body (no non-whitespace characters), then the system shall
 discard the comment and close the float without storing an extmark.
 
-### 6.3 Git storage (REQ-STO)
+### 6.3 File storage (REQ-STO)
 
 **REQ-STO-0001** (Event-driven): When the user submits a review, the system
-shall create a git blob containing the review JSON, build a tree containing that
-blob as `review.json`, create a commit with a single parent, and write a ref
-under `refs/reviews/<id>`.
+shall write the review JSON to the audit trail directory at
+`~/.local/share/nvim/code-review/<project-hash>/<timestamp>.json`.
 
-**REQ-STO-0002** (Ubiquitous): The system shall generate review IDs with the
-timestamp portion in the format `YYYYMMDDTHHMMSS` (UTC). The ref name appends
-`-<8-char-commit-sha>` after the commit is created.
+**REQ-STO-0002** (Ubiquitous): The system shall generate review IDs in the
+format `YYYYMMDDTHHMMSS` (UTC).
 
-**REQ-STO-0003** (Ubiquitous): The review commit shall have exactly one parent:
-for a single-commit review, the reviewed commit; for a range review (`A..B` or
-`A...B`), the head revision B; for a working-tree review, HEAD at the time of
-review. The full range is recoverable from `diff_spec`.
+**REQ-STO-0003** (Event-driven): When the user submits a review, the system
+shall write the absolute path of the saved review JSON file to the result
+file specified by `$NVIM_CODE_REVIEW_RESULT`.
 
-**REQ-STO-0004** (Ubiquitous): The `review.json` blob shall conform to the
-schema defined in section 3.2.
+**REQ-STO-0004** (Ubiquitous): The review JSON shall conform to the schema
+defined in section 3.2.
 
-**REQ-STO-0005** (Ubiquitous): Each `files[].lines[]` entry shall include the
-full unified-diff hunk (from `@@` header through the last line of the hunk)
-that contains the commented line, stored in the `diff_hunk` field. The hunk
-shall be extracted from the same diff source used for display.
+**REQ-STO-0005** (Ubiquitous): Each `files[].lines[]` entry shall include
+the full unified-diff hunk (from `@@` header through the last line of the
+hunk) that contains the commented line, stored in the `diff_hunk` field.
 
-**REQ-STO-0006** (Event-driven): When the user submits without adding any
-comments or verdict, the system shall create a review ref with an empty `files`
-array and null `verdict`.
+**REQ-STO-0006** (Event-driven): When the user exits without adding any
+comments or verdict, the system shall create a review file with an empty
+`files` array and null `verdict`.
 
-**REQ-STO-0007** (Ubiquitous): The review JSON `diff_spec` object shall record
-the diff type (`commit_range`, `branch`, or `working_tree`), the base revision,
-and the head revision as full 40-character SHAs resolved at review time,
-conforming to the diff_spec-by-type table in section 3.2.
+**REQ-STO-0007** (Ubiquitous): The review JSON `diff_spec` object shall
+record the diff type, the base revision (as full 40-character SHA), and the
+head revision, resolved at review time.
 
 ### 6.4 CLI / agent interface (REQ-CLI)
 
 **REQ-CLI-0001** (Event-driven): When invoked via `nvim -c 'CodeReview
-<range>'`, the system shall parse the range argument and open the corresponding
-diff.
+<range>'`, the system shall parse the range argument and open the
+corresponding diff.
 
-**REQ-CLI-0002** (Event-driven): When a review session ends normally, the system
-shall write the full ref name as a single line to the result file (see section
-5.2) and exit Neovim with exit code 0.
+**REQ-CLI-0002** (Event-driven): When a review session ends normally, the
+system shall write the review file path to the result file and exit with
+code 0.
 
-**REQ-CLI-0003** (Ubiquitous): The system shall use only git plumbing commands
-(`hash-object`, `mktree`, `commit-tree`, `update-ref`) for ref creation, not
-porcelain commands.
+**REQ-CLI-0003** (Event-driven): When the user executes `:CodeReviewCopy`,
+the system shall export the current review as GitHub-flavored Markdown to
+the system clipboard.
 
 **REQ-CLI-0004** (Ubiquitous): The review JSON shall be self-contained: any
-consumer shall be able to read the review using only `git cat-file blob
-<ref>:review.json` without needing the plugin installed.
+consumer shall be able to read the review by parsing the JSON file without
+needing the plugin installed.
 
 ### 6.5 UI interaction (REQ-UIX)
 
@@ -830,7 +825,7 @@ virtual line at the top of the file's diff buffer using the
 
 **REQ-UIX-0007** (Event-driven): When the user quits Neovim without submitting
 a review, the system shall intercept the quit via `QuitPre`, allow the quit to
-proceed, create no review ref, and exit with code 2 (see section 4.7).
+proceed, create no review file, and exit with code 2 (see section 4.9).
 
 ### 6.6 Error handling (REQ-ERR)
 
@@ -845,11 +840,9 @@ system shall exit with code 1 and print a diagnostic to stderr.
 git repository, then the system shall exit with code 1 and print a diagnostic to
 stderr.
 
-**REQ-ERR-0004** (Unwanted-behavior): If any step in the ref creation sequence
-fails (`hash-object`, `mktree`, `commit-tree`, or `update-ref`), then the
-system shall stop the sequence, print the failing command and its stderr to
-stderr, exit with code 1, and not write a ref name to the result file. Orphaned
-objects from incomplete sequences are harmless and reclaimed by `git gc`.
+**REQ-ERR-0004** (Unwanted-behavior): If the audit trail directory cannot be
+created or written to, then the system shall exit with code 1 and print a
+diagnostic to stderr.
 
 **REQ-ERR-0005** (Unwanted-behavior): If diffview.nvim is not installed or
 cannot be loaded, then the system shall display a diagnostic in the Neovim
@@ -872,6 +865,27 @@ diagnostic to stderr identifying the incompatible diffview version.
 **REQ-ERR-0008** (Unwanted-behavior): If stdin is not a TTY, then the system
 shall exit with code 1 and print a diagnostic to stderr.
 
+### 6.7 Session management (REQ-SES)
+
+**REQ-SES-0001** (Event-driven): When the user executes `:CodeReviewPause`,
+the system shall save the current session state to the sessions directory
+and close the diffview UI without exiting Neovim.
+
+**REQ-SES-0002** (Event-driven): When the user executes
+`:CodeReviewSessions`, the system shall display a list of saved sessions
+for the current project in a floating window.
+
+**REQ-SES-0003** (Ubiquitous): Session state shall include all comments,
+the verdict, the diff range, and the timestamp of creation and last
+modification.
+
+**REQ-SES-0004** (Event-driven): When the user selects a session from the
+session list, the system shall resume the session by opening diffview with
+the saved range and restoring all comments.
+
+**REQ-SES-0005** (Event-driven): When a resumed session is submitted, the
+system shall delete the session file.
+
 ## 7. Verification Matrix
 
 | Requirement   | Test ID       | Method   | Description |
@@ -891,33 +905,38 @@ shall exit with code 1 and print a diagnostic to stderr.
 | REQ-CMT-0007  | TST-CMT-0007  | Manual   | Open comment float, press q in normal mode, verify float closes with no comment stored |
 | REQ-CMT-0008  | TST-CMT-0008  | Manual   | Add comment on a line, press add-comment on same line, verify float pre-populated; confirm, verify comment replaced |
 | REQ-CMT-0009  | TST-CMT-0009  | Manual   | Open comment float, confirm with empty/whitespace body, verify no comment stored |
-| REQ-STO-0001  | TST-STO-0001  | Auto     | Submit review, verify ref exists and commit topology is correct |
-| REQ-STO-0002  | TST-STO-0002  | Auto     | Submit review, verify ref name matches `YYYYMMDDTHHMMSS-<8-char-sha>` and JSON id matches timestamp portion |
-| REQ-STO-0003  | TST-STO-0003  | Auto     | Submit review for each diff type, verify exactly one parent matching the expected commit |
-| REQ-STO-0004  | TST-STO-0004  | Auto     | Submit review, validate `review.json` against JSON Schema |
+| REQ-STO-0001  | TST-STO-0001  | Auto     | Submit review, verify JSON file exists in audit trail directory with correct timestamp filename |
+| REQ-STO-0002  | TST-STO-0002  | Auto     | Submit review, verify review ID matches `YYYYMMDDTHHMMSS` format and matches the filename stem |
+| REQ-STO-0003  | TST-STO-0003  | Auto     | Submit review, verify result file contains the absolute path to the review JSON |
+| REQ-STO-0004  | TST-STO-0004  | Auto     | Submit review, validate review JSON against JSON Schema |
 | REQ-STO-0005  | TST-STO-0005  | Auto     | Submit review with line comment, verify `diff_hunk` starts with `@@` header and contains the commented line |
-| REQ-STO-0006  | TST-STO-0006  | Auto     | Submit without commenting, verify ref exists with empty files and null verdict |
-| REQ-STO-0007  | TST-STO-0007  | Auto     | Submit review for each diff type, verify diff_spec fields contain resolved 40-char SHAs per the diff_spec table |
+| REQ-STO-0006  | TST-STO-0006  | Auto     | Submit without commenting, verify review file exists with empty files and null verdict |
+| REQ-STO-0007  | TST-STO-0007  | Auto     | Submit review for each diff type, verify diff_spec fields contain resolved 40-char SHAs |
 | REQ-CLI-0001  | TST-CLI-0001  | Auto     | Invoke with each range format via `-c`, verify correct diff opens |
-| REQ-CLI-0002  | TST-CLI-0002  | Auto     | Complete review, read result file, verify ref name written |
-| REQ-CLI-0003  | TST-CLI-0003  | Auto     | Submit review, intercept `vim.system()` calls via test harness, verify all git invocations use plumbing subcommands |
-| REQ-CLI-0004  | TST-CLI-0004  | Auto     | Read review with `git cat-file blob <ref>:review.json`, verify valid JSON |
+| REQ-CLI-0002  | TST-CLI-0002  | Auto     | Complete review, read result file, verify review file path written |
+| REQ-CLI-0003  | TST-CLI-0003  | Manual   | Execute `:CodeReviewCopy`, verify system clipboard contains GitHub-flavored Markdown with correct structure |
+| REQ-CLI-0004  | TST-CLI-0004  | Auto     | Read review JSON file directly, verify valid JSON parseable without the plugin |
 | REQ-UIX-0001  | TST-UIX-0001  | Manual   | Press summary key, verify summary lists comments grouped by file with line numbers, verdict, and count |
 | REQ-UIX-0002  | TST-UIX-0002  | Manual   | Confirm summary, verify review saved and Neovim exits |
 | REQ-UIX-0003  | TST-UIX-0003  | Manual   | Add comment, verify virtual text rendered with `CodeReviewComment` highlight |
 | REQ-UIX-0004  | TST-UIX-0004  | Manual   | Add comment, verify sign column shows `●` with `CodeReviewSign` highlight |
 | REQ-UIX-0005  | TST-UIX-0005  | Manual   | Override keybinding in setup, verify new binding works |
 | REQ-UIX-0006  | TST-UIX-0006  | Manual   | Add file-level comment, verify virtual line at top of file's diff buffer with `CodeReviewFileComment` highlight |
-| REQ-UIX-0007  | TST-UIX-0007  | Auto     | Quit Neovim without submitting, verify no ref created and exit code is 2 |
+| REQ-UIX-0007  | TST-UIX-0007  | Auto     | Quit Neovim without submitting, verify no review file created and exit code is 2 |
 | REQ-ERR-0001  | TST-ERR-0001  | Auto     | Invoke with empty range, verify exit code 1 and stderr message |
 | REQ-ERR-0002  | TST-ERR-0002  | Auto     | Remove git from PATH, invoke, verify exit code 1 |
 | REQ-ERR-0003  | TST-ERR-0003  | Auto     | Invoke outside git repo, verify exit code 1 |
-| REQ-ERR-0004  | TST-ERR-0004  | Auto     | Simulate write failure at each plumbing step, verify exit code 1 and no result file written |
+| REQ-ERR-0004  | TST-ERR-0004  | Auto     | Make audit trail directory unwritable, verify exit code 1 and diagnostic to stderr |
 | REQ-ERR-0005  | TST-ERR-0005  | Auto     | Remove diffview.nvim from runtimepath, invoke, verify exit code 1 and diagnostic naming diffview |
 | REQ-ERR-0006  | TST-ERR-0006  | Auto     | Mock `vim.version()` to return 0.9, verify exit code 1 and version diagnostic |
 | REQ-ERR-0007  | TST-ERR-0007  | Auto     | Invoke with nonexistent branch name, verify exit code 1 and diagnostic naming the revision |
 | REQ-ERR-0008  | TST-ERR-0008  | Auto     | Invoke with stdin redirected from /dev/null, verify exit code 1 |
 | REQ-ERR-0009  | TST-ERR-0009  | Auto     | Mock `diffview.lib` to omit `get_current_view`, verify exit code 1 and diagnostic naming diffview API |
+| REQ-SES-0001  | TST-SES-0001  | Manual   | Execute `:CodeReviewPause`, verify session file created in sessions directory and diffview UI closed |
+| REQ-SES-0002  | TST-SES-0002  | Manual   | Execute `:CodeReviewSessions`, verify floating window lists saved sessions with range, count, and date |
+| REQ-SES-0003  | TST-SES-0003  | Auto     | Pause a session, read the session JSON, verify it contains comments, verdict, diff range, and timestamps |
+| REQ-SES-0004  | TST-SES-0004  | Manual   | Pause a session with comments, resume from session list, verify diffview reopens with all comments restored |
+| REQ-SES-0005  | TST-SES-0005  | Auto     | Resume a paused session and submit, verify the session file is deleted from the sessions directory |
 
 ## 8. Acceptance Criteria
 
@@ -934,9 +953,9 @@ Each scenario must pass without modification to the test steps.
 3. In the diff view, add a line comment on a changed line and a file comment.
 4. Set a verdict.
 5. Submit via `:CodeReviewSubmit`.
-6. Verify: exit code is 0, result file contains a ref starting with
-   `refs/reviews/`, `git show <ref>:review.json` returns valid JSON with the
-   comment text, correct line numbers, and a non-null verdict.
+6. Verify: exit code is 0, result file contains an absolute path to a JSON
+   file in the audit trail directory. Reading that file returns valid JSON
+   with the comment text, correct line numbers, and a non-null verdict.
 
 **AC-E2E-02: Agent review cycle (working tree)**
 
@@ -951,31 +970,51 @@ Each scenario must pass without modification to the test steps.
 
 1. Run `NVIM_CODE_REVIEW_RESULT=$(mktemp) nvim -c 'CodeReview HEAD~1..HEAD'`.
 2. Submit without adding any comments or verdict.
-3. Verify: exit code 0, result file contains a ref, `review.json` has an empty
-   `files` array and null `verdict`.
+3. Verify: exit code 0, result file contains a file path, the review JSON has
+   an empty `files` array and null `verdict`.
 
 **AC-E2E-04: User cancellation**
 
 1. Run `NVIM_CODE_REVIEW_RESULT=$(mktemp) nvim -c 'CodeReview HEAD~1..HEAD'`.
 2. Add a comment, then quit with `:qa!` without submitting.
-3. Verify: exit code is 2, result file is empty or absent, no new ref exists
-   under `refs/reviews/`.
+3. Verify: exit code is 2, result file is empty or absent, no new review
+   file exists in the audit trail directory.
 
 **AC-E2E-05: Error on bad input**
 
 1. Run `NVIM_CODE_REVIEW_RESULT=$(mktemp) nvim -c 'CodeReview nonexistent..HEAD'`.
 2. Verify: exit code is 1, stderr contains a diagnostic naming the unresolvable
-   revision, no ref is created.
+   revision, no review file is created.
 
 **AC-E2E-06: Review JSON is self-contained**
 
 1. Complete a review on a commit range.
-2. Read the review using only `git cat-file blob <ref>:review.json`.
+2. Read the review JSON file directly from the audit trail directory.
 3. Without the plugin installed, parse the JSON and extract: the diff type,
    base and head SHAs, all file paths, all line numbers, all comment bodies,
    and the verdict.
 4. Verify: every field required by the schema in section 3.2 is present and
    parseable. No field requires the plugin or Neovim to interpret.
+
+**AC-E2E-07: Clipboard export**
+
+1. Start a review on a commit range and add line and file comments.
+2. Execute `:CodeReviewCopy`.
+3. Verify: system clipboard contains GitHub-flavored Markdown with headings
+   per file, diff hunks in fenced code blocks, comment text, and a summary
+   section with total count and verdict.
+
+**AC-E2E-08: Session pause and resume**
+
+1. Start a review, add two comments, and execute `:CodeReviewPause`.
+2. Verify: diffview closes, Neovim remains open, a session file exists in
+   the sessions directory.
+3. Execute `:CodeReviewSessions`, select the saved session.
+4. Verify: diffview reopens with the same range, both comments are visible
+   as extmarks.
+5. Submit the resumed session.
+6. Verify: the session file is deleted, a review file is created in the
+   audit trail directory with both comments.
 
 ### 8.2 Quality gates
 
@@ -987,7 +1026,7 @@ All gates must pass before a version is tagged.
 | Manual tests | All manual tests in the verification matrix executed and recorded as pass |
 | Schema validation | `review.json` output validates against `schema/review.v1.json` for every end-to-end scenario |
 | Dependency check | Plugin loads and reports a clear error when diffview.nvim is absent, Neovim < 0.10, or git is missing |
-| Idempotent reads | `git cat-file blob <ref>:review.json` returns identical JSON on repeated reads |
+| Portable reads | Review files are valid JSON parseable without the plugin by any JSON parser |
 | No data loss | Comments entered in the UI appear in the persisted JSON without truncation or encoding errors |
 | Exit code contract | Exit codes match section 5.2 for all three paths (submit, cancel, error) |
 
