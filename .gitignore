@@ -19,3 +19,6 @@ TRASH-*/
 
 # Lua bytecode
 *.luac
+
+# Test dependencies (downloaded by tests/minimal_init.lua)
+.tests/
