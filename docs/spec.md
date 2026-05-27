@@ -73,6 +73,8 @@ feedback.
    range: `:DiffviewOpen <base>..<head>`. For branch divergence:
    `:DiffviewOpen <base>...<head>`. For a single commit:
    `:DiffviewOpen <commit>^..<commit>`.
+   Side detection and file path resolution use diffview's Lua API (see
+   section 4.4 and 4.8 for details and stability contract).
 3. User navigates diffs, adds comments via keybindings
 4. Comments are held in memory and rendered as extmarks
 5. User finishes review (`:CodeReviewSubmit` or summary confirmation). If the
@@ -436,17 +438,70 @@ whenever diffview opens a new buffer for a file that has comments. The plugin
 shall listen for `BufWinEnter` or diffview's `view_opened` callback to trigger
 re-application.
 
-### 4.4 Diffview integration events
+### 4.4 Diffview integration
 
-The plugin hooks into diffview's lifecycle via these mechanisms:
+The plugin integrates with diffview.nvim through two mechanisms: `User`
+autocmd events and the `require("diffview.lib")` module.
 
-- `DiffviewViewOpened`: Triggered when diffview opens. The plugin uses this to
-  register buffer-local keymaps on the initial buffers.
-- `BufWinEnter` on `DiffviewFile*` filetypes: Triggered when the user navigates
-  to a different file. The plugin re-applies extmarks from its comment store for
-  the newly visible file.
-- `DiffviewViewClosed`: Triggered when diffview closes (`:DiffviewClose` or
-  quit). The plugin uses this to trigger the submit/cancel flow.
+**Autocmd events used** (registered when `:CodeReview` opens diffview):
+
+| Event | Trigger | Plugin action |
+|-------|---------|---------------|
+| `User DiffviewDiffBufRead` | A diff buffer is created and loaded | Set buffer-local keymaps, apply extmarks from comment store |
+| `User DiffviewDiffBufWinEnter` | A diff buffer enters a window | Re-apply extmarks unconditionally (safety net for buffer reuse) |
+| `User DiffviewViewClosed` | The diffview tab is closed | Trigger cancel exit path if review not yet submitted |
+
+All autocmds are created in a dedicated `augroup` (`code_review_session`)
+and cleared when the review session ends.
+
+**Side detection**: In diffview's Diff2 layout, `view.cur_layout.a` is the
+left (old/base) window and `view.cur_layout.b` is the right (new/head)
+window. Each has an `.id` field containing the Neovim window ID. The plugin
+compares `vim.api.nvim_get_current_win()` against these to determine side:
+
+```lua
+local view = require("diffview.lib").get_current_view()
+local win = vim.api.nvim_get_current_win()
+if win == view.cur_layout.a.id then
+  side = "old"
+elseif win == view.cur_layout.b.id then
+  side = "new"
+end
+```
+
+**File path resolution**: The plugin resolves the repository-relative file
+path using diffview's view API:
+
+```lua
+local view = require("diffview.lib").get_current_view()
+local file = view:infer_cur_file()
+local path = file.path  -- repo-relative string
+```
+
+For the file panel (when adding file-level comments), the file under the
+cursor is resolved via:
+
+```lua
+local item = view.panel:get_item_at_cursor()
+local path = item.path
+```
+
+**Buffer lifecycle**: diffview reuses diff buffers by default when the user
+navigates between files. Extmarks set on a buffer persist across file
+switches as long as the buffer is not wiped. The plugin re-applies extmarks
+on every `DiffviewDiffBufWinEnter` event regardless, so comments remain
+visible even if a buffer is recreated.
+
+**Floating windows**: Floating windows (SCR-COMMENT-01, SCR-SUMMARY-01)
+are independent Neovim windows. diffview uses tab-scoped layout and does
+not close or rearrange windows it did not create. No special handling is
+needed.
+
+**Keybinding conflict avoidance**: diffview's default keybindings use
+single-character keys (`a`, `x`, `-`, `s`, `gf`). The plugin's defaults
+use `<leader>` prefixed chords (`<leader>cc`, `<leader>cf`) to avoid
+collisions. Both use buffer-local mappings; if a conflict occurs, the later
+mapping wins. Users can resolve conflicts via `keymaps` in `setup()`.
 
 ### 4.5 Plugin configuration
 
@@ -493,6 +548,36 @@ cancellation, not as an empty review.
 **Working-tree review caveat**: The review JSON captures the diff as it
 appeared at review time. Subsequent edits to the working tree are not
 reflected in the stored `diff_hunk` context.
+
+### 4.8 Diffview API dependency
+
+The plugin accesses diffview's Lua modules directly:
+
+| Module | Functions used | Purpose |
+|--------|---------------|---------|
+| `require("diffview.lib")` | `get_current_view()` | Obtain the active View object |
+| View object | `infer_cur_file()`, `cur_layout.a.id`, `cur_layout.b.id` | File path and side detection |
+| Panel object | `get_item_at_cursor()` | File under cursor in file panel |
+
+These are internal APIs used by diffview's own actions module. They are not
+part of a documented stability contract. A diffview update could rename or
+remove them.
+
+**Mitigation**:
+
+1. The plugin wraps all diffview API access in a single module
+   (`lua/code-review/diff.lua`). If diffview changes its API, only this
+   module needs updating.
+2. At startup, the plugin verifies that the required functions exist:
+   ```lua
+   local ok, lib = pcall(require, "diffview.lib")
+   if not ok or type(lib.get_current_view) ~= "function" then
+     -- exit with code 1 and diagnostic (REQ-ERR-0009)
+   end
+   ```
+3. The `User` autocmd events (`DiffviewDiffBufRead`, etc.) are a more
+   stable surface than the Lua API, since they are part of diffview's
+   documented user-facing contract.
 
 ## 5. CLI Interface Spec
 
@@ -779,6 +864,11 @@ the minimum required version.
 that cannot be resolved by git, then the system shall exit with code 1 and print
 a diagnostic to stderr identifying the unresolvable revision.
 
+**REQ-ERR-0009** (Unwanted-behavior): If the required diffview.nvim API
+functions (`get_current_view`, `infer_cur_file`, `get_item_at_cursor`) are
+not available, then the system shall exit with code 1 and print a
+diagnostic to stderr identifying the incompatible diffview version.
+
 **REQ-ERR-0008** (Unwanted-behavior): If stdin is not a TTY, then the system
 shall exit with code 1 and print a diagnostic to stderr.
 
@@ -827,6 +917,7 @@ shall exit with code 1 and print a diagnostic to stderr.
 | REQ-ERR-0006  | TST-ERR-0006  | Auto     | Mock `vim.version()` to return 0.9, verify exit code 1 and version diagnostic |
 | REQ-ERR-0007  | TST-ERR-0007  | Auto     | Invoke with nonexistent branch name, verify exit code 1 and diagnostic naming the revision |
 | REQ-ERR-0008  | TST-ERR-0008  | Auto     | Invoke with stdin redirected from /dev/null, verify exit code 1 |
+| REQ-ERR-0009  | TST-ERR-0009  | Auto     | Mock `diffview.lib` to omit `get_current_view`, verify exit code 1 and diagnostic naming diffview API |
 
 ## 8. Acceptance Criteria
 
