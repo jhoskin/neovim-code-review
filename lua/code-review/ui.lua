@@ -1,0 +1,218 @@
+local config = require("code-review.config")
+
+local M = {}
+
+M.ns = nil
+
+function M.create_namespace()
+  if not M.ns then
+    M.ns = vim.api.nvim_create_namespace("code_review")
+  end
+  return M.ns
+end
+
+function M.render_line_comment(bufnr, line, body)
+  local ns = M.create_namespace()
+  local virt_lines = {}
+  for _, text_line in ipairs(vim.split(body, "\n")) do
+    table.insert(virt_lines, { { config.values.sign_text .. " " .. text_line, "CodeReviewComment" } })
+  end
+
+  return vim.api.nvim_buf_set_extmark(bufnr, ns, line - 1, 0, {
+    virt_lines = virt_lines,
+    virt_lines_above = false,
+    sign_text = config.values.sign_text,
+    sign_hl_group = "CodeReviewSign",
+  })
+end
+
+function M.render_file_comment(bufnr, body)
+  local ns = M.create_namespace()
+  local virt_lines = {}
+  for _, text_line in ipairs(vim.split(body, "\n")) do
+    table.insert(virt_lines, { { "📄 " .. text_line, "CodeReviewFileComment" } })
+  end
+
+  return vim.api.nvim_buf_set_extmark(bufnr, ns, 0, 0, {
+    virt_lines = virt_lines,
+    virt_lines_above = true,
+  })
+end
+
+function M.clear_extmarks(bufnr)
+  local ns = M.create_namespace()
+  vim.api.nvim_buf_clear_namespace(bufnr, ns, 0, -1)
+end
+
+function M.reapply_from_store(bufnr, file_path, store, side)
+  M.clear_extmarks(bufnr)
+  local file_data = store:get_comments_for_file(file_path)
+  if not file_data then
+    return
+  end
+
+  if file_data.comment then
+    M.render_file_comment(bufnr, file_data.comment)
+  end
+
+  for _, comment in pairs(file_data.lines) do
+    if comment.side == side then
+      local line = side == "old" and comment.old_lineno or comment.new_lineno
+      if line then
+        M.render_line_comment(bufnr, line, comment.body)
+      end
+    end
+  end
+end
+
+function M.open_comment_float(opts)
+  opts = opts or {}
+  local prefill = opts.prefill or ""
+  local on_confirm = opts.on_confirm
+  local on_cancel = opts.on_cancel
+
+  local buf = vim.api.nvim_create_buf(false, true)
+  vim.bo[buf].buftype = "nofile"
+  vim.bo[buf].filetype = "markdown"
+
+  if prefill ~= "" then
+    local lines = vim.split(prefill, "\n")
+    vim.api.nvim_buf_set_lines(buf, 0, -1, false, lines)
+  end
+
+  local width = math.min(80, math.floor(vim.o.columns * 0.6))
+  local height = math.max(3, math.min(10, #vim.split(prefill, "\n") + 2))
+
+  local win = vim.api.nvim_open_win(buf, true, {
+    relative = "cursor",
+    row = 1,
+    col = 0,
+    width = width,
+    height = height,
+    style = "minimal",
+    border = "rounded",
+    title = " Comment ",
+    title_pos = "center",
+  })
+
+  vim.cmd("startinsert!")
+
+  local function close()
+    if vim.api.nvim_win_is_valid(win) then
+      vim.api.nvim_win_close(win, true)
+    end
+    if vim.api.nvim_buf_is_valid(buf) then
+      vim.api.nvim_buf_delete(buf, { force = true })
+    end
+  end
+
+  local function confirm()
+    local lines = vim.api.nvim_buf_get_lines(buf, 0, -1, false)
+    local text = vim.trim(table.concat(lines, "\n"))
+    close()
+    if text == "" then
+      if on_cancel then
+        on_cancel()
+      end
+      return
+    end
+    if on_confirm then
+      on_confirm(text)
+    end
+  end
+
+  local function cancel()
+    close()
+    if on_cancel then
+      on_cancel()
+    end
+  end
+
+  local km_opts = { buffer = buf, nowait = true }
+  vim.keymap.set({ "n", "i" }, config.values.keymaps.confirm_comment, confirm, km_opts)
+  vim.keymap.set("n", "q", cancel, km_opts)
+end
+
+function M.open_summary_float(store, on_confirm, on_cancel)
+  local lines = M._build_summary_lines(store)
+  local buf = vim.api.nvim_create_buf(false, true)
+  vim.bo[buf].buftype = "nofile"
+  vim.bo[buf].modifiable = true
+  vim.api.nvim_buf_set_lines(buf, 0, -1, false, lines)
+  vim.bo[buf].modifiable = false
+  vim.bo[buf].filetype = "markdown"
+
+  local width = math.min(100, math.floor(vim.o.columns * 0.8))
+  local height = math.min(#lines + 2, math.floor(vim.o.lines * 0.8))
+
+  local win = vim.api.nvim_open_win(buf, true, {
+    relative = "editor",
+    row = math.floor((vim.o.lines - height) / 2),
+    col = math.floor((vim.o.columns - width) / 2),
+    width = width,
+    height = height,
+    style = "minimal",
+    border = "rounded",
+    title = " Review Summary — <CR> submit, q cancel ",
+    title_pos = "center",
+  })
+
+  local function close()
+    if vim.api.nvim_win_is_valid(win) then
+      vim.api.nvim_win_close(win, true)
+    end
+    if vim.api.nvim_buf_is_valid(buf) then
+      vim.api.nvim_buf_delete(buf, { force = true })
+    end
+  end
+
+  vim.keymap.set("n", "<CR>", function()
+    close()
+    if on_confirm then
+      on_confirm()
+    end
+  end, { buffer = buf, nowait = true })
+
+  vim.keymap.set("n", "q", function()
+    close()
+    if on_cancel then
+      on_cancel()
+    end
+  end, { buffer = buf, nowait = true })
+end
+
+function M._build_summary_lines(store)
+  local lines = {}
+  local function add(s)
+    table.insert(lines, s)
+  end
+
+  local count = store:comment_count()
+  add("# Review Summary")
+  add("")
+  add("Comments: " .. count)
+  add("Verdict: " .. (store.verdict or "(none)"))
+  add("")
+
+  for _, file_data in ipairs(store:get_all()) do
+    add("## " .. file_data.path)
+
+    if file_data.comment then
+      add("  File: " .. file_data.comment)
+    end
+
+    for _, comment in ipairs(file_data.lines) do
+      local lineno = comment.new_lineno or comment.old_lineno
+      add("  L" .. tostring(lineno) .. " (" .. comment.side .. "): " .. comment.body:gsub("\n", " "))
+    end
+    add("")
+  end
+
+  if count == 0 and not store.verdict then
+    add("(empty review — no comments or verdict)")
+  end
+
+  return lines
+end
+
+return M
