@@ -1012,12 +1012,15 @@ isolates the plugin's diff buffers and floats from such LSPs.
 
 **REQ-LSP-0001** (State-driven): While a review session is active, for
 every diff buffer the plugin sees (via `DiffviewDiffBufRead` and
-`DiffviewDiffBufWinEnter`), the plugin shall force-stop every LSP client
-currently attached to that buffer using `vim.lsp.stop_client(client_id,
-true)`. Force-stop sends `shutdown`/`exit` to the server process rather
-than per-buffer `textDocument/didClose`, avoiding the crash. The plugin
-shall also register a buffer-local `LspAttach` autocmd that force-stops
-any LSP that attaches later.
+`DiffviewDiffBufWinEnter`), the plugin shall gracefully stop every LSP
+client currently attached to that buffer using
+`vim.lsp.stop_client(client_id, false)` (force=false). Graceful stop
+sends the LSP `shutdown` request followed by `exit` notification, so the
+server terminates with exit code 0 and Neovim does not surface an error.
+This avoids both the Marksman `closeDoc` crash (caused by per-buffer
+`textDocument/didClose`) and the SIGTERM exit code 143 notification
+caused by force-stop. The plugin shall also register a buffer-local
+`LspAttach` autocmd that gracefully stops any LSP that attaches later.
 
 **REQ-LSP-0002** (Ubiquitous): The comment input float (SCR-COMMENT-01)
 and the summary float (SCR-SUMMARY-01) shall use the custom filetype
