@@ -33,15 +33,15 @@ if ok then
       if bufnr then
         local maps = vim.api.nvim_buf_get_keymap(bufnr, 'n')
         table.insert(lines, side_name .. '_keymap_count=' .. tostring(#maps))
-        local has_cc, has_cs, has_cd = false, false, false
+        local has_rc, has_rs, has_rd = false, false, false
         for _, m in ipairs(maps) do
-          if m.lhs == ' cc' then has_cc = true end
-          if m.lhs == ' cs' then has_cs = true end
-          if m.lhs == ' cd' then has_cd = true end
+          if m.lhs == ' Rc' then has_rc = true end
+          if m.lhs == ' Rs' then has_rs = true end
+          if m.lhs == ' Rd' then has_rd = true end
         end
-        table.insert(lines, side_name .. '_has_cc=' .. tostring(has_cc))
-        table.insert(lines, side_name .. '_has_cs=' .. tostring(has_cs))
-        table.insert(lines, side_name .. '_has_cd=' .. tostring(has_cd))
+        table.insert(lines, side_name .. '_has_rc=' .. tostring(has_rc))
+        table.insert(lines, side_name .. '_has_rs=' .. tostring(has_rs))
+        table.insert(lines, side_name .. '_has_rd=' .. tostring(has_rd))
       end
     end
     check('a', v.cur_layout.a)
@@ -71,15 +71,15 @@ echo "--- check results ---"
 cat /tmp/cr-keymap-check.txt
 echo "--- end ---"
 
-a_has_cc=$(grep '^a_has_cc=' /tmp/cr-keymap-check.txt | cut -d= -f2 || echo "missing")
-b_has_cc=$(grep '^b_has_cc=' /tmp/cr-keymap-check.txt | cut -d= -f2 || echo "missing")
+a_has_rc=$(grep '^a_has_rc=' /tmp/cr-keymap-check.txt | cut -d= -f2 || echo "missing")
+b_has_rc=$(grep '^b_has_rc=' /tmp/cr-keymap-check.txt | cut -d= -f2 || echo "missing")
 
-if [ "$a_has_cc" = "true" ] && [ "$b_has_cc" = "true" ]; then
-  echo "PASS: <leader>cc keymap set on both old (a) and new (b) diff buffers"
-elif [ "$b_has_cc" = "true" ]; then
-  echo "PARTIAL: <leader>cc on new side only"
+if [ "$a_has_rc" = "true" ] && [ "$b_has_rc" = "true" ]; then
+  echo "PASS: <leader>Rc keymap set on both old (a) and new (b) diff buffers"
+elif [ "$b_has_rc" = "true" ]; then
+  echo "PARTIAL: <leader>Rc on new side only"
   exit 1
 else
-  echo "FAIL: <leader>cc not set"
+  echo "FAIL: <leader>Rc not set"
   exit 1
 fi

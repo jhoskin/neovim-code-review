@@ -2,13 +2,13 @@ local M = {}
 
 M.defaults = {
   keymaps = {
-    add_comment = "<leader>cc",
-    file_comment = "<leader>cf",
-    verdict = "<leader>cv",
-    delete_comment = "<leader>cd",
-    summary = "<leader>cs",
-    cancel = "<leader>cq",
-    pause = "<leader>cp",
+    add_comment = "<leader>Rc",
+    file_comment = "<leader>Rf",
+    verdict = "<leader>Rv",
+    delete_comment = "<leader>Rd",
+    summary = "<leader>Rs",
+    cancel = "<leader>Rq",
+    pause = "<leader>Rp",
     confirm_comment = "<C-s>",
   },
   highlights = {
