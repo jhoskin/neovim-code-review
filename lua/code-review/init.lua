@@ -82,9 +82,24 @@ function M.submit()
     return
   end
 
+  -- Build a preview of the exact markdown that will be exported on confirm.
+  local data = review.serialize(M._session.store, M._session.diff_info)
+  M._populate_hunks(data)
+  local agent_mode = vim.env.NVIM_CODE_REVIEW_RESULT ~= nil
+    and vim.env.NVIM_CODE_REVIEW_RESULT ~= ""
+  local mode_note = agent_mode
+      and "Confirming will write to the result file and exit Neovim."
+    or "Confirming will copy the markdown below to your clipboard and close the review."
+
+  local markdown = export.to_markdown(data)
+  local preview = { "Submit review?", "", mode_note, "" }
+  for _, line in ipairs(vim.split(markdown, "\n", { plain = true })) do
+    table.insert(preview, line)
+  end
+
   ui.open_summary_float(M._session.store, function()
     M._do_submit()
-  end, nil)
+  end, nil, preview)
 end
 
 function M.cancel()
