@@ -458,46 +458,29 @@ function M._set_file_panel_keymaps(bufnr)
     return
   end
   local km = config.values.keymaps
-  local opts = { buffer = bufnr, nowait = true }
-  vim.keymap.set("n", km.file_comment, function()
-    M.add_file_comment()
-  end, opts)
-  vim.keymap.set("n", km.summary, function()
-    M.submit()
-  end, opts)
-  vim.keymap.set("n", km.cancel, function()
-    M.cancel()
-  end, opts)
-  vim.keymap.set("n", km.pause, function()
-    M.pause()
-  end, opts)
+  local function map(lhs, fn, desc)
+    vim.keymap.set("n", lhs, fn, { buffer = bufnr, nowait = true, desc = desc })
+  end
+
+  map(km.file_comment, M.add_file_comment, "Code review: add file comment")
+  map(km.summary, M.submit, "Code review: submit (show summary)")
+  map(km.cancel, M.cancel, "Code review: cancel review")
+  map(km.pause, M.pause, "Code review: pause session")
 end
 
 function M._set_keymaps(bufnr)
   local km = config.values.keymaps
-  local opts = { buffer = bufnr, nowait = true }
+  local function map(lhs, fn, desc)
+    vim.keymap.set("n", lhs, fn, { buffer = bufnr, nowait = true, desc = desc })
+  end
 
-  vim.keymap.set("n", km.add_comment, function()
-    M.add_comment()
-  end, opts)
-  vim.keymap.set("n", km.delete_comment, function()
-    M.delete_comment()
-  end, opts)
-  vim.keymap.set("n", km.verdict, function()
-    M.set_verdict()
-  end, opts)
-  vim.keymap.set("n", km.summary, function()
-    M.submit()
-  end, opts)
-  vim.keymap.set("n", km.file_comment, function()
-    M.add_file_comment()
-  end, opts)
-  vim.keymap.set("n", km.cancel, function()
-    M.cancel()
-  end, opts)
-  vim.keymap.set("n", km.pause, function()
-    M.pause()
-  end, opts)
+  map(km.add_comment, M.add_comment, "Code review: add line comment")
+  map(km.delete_comment, M.delete_comment, "Code review: delete comment")
+  map(km.verdict, M.set_verdict, "Code review: set verdict")
+  map(km.summary, M.submit, "Code review: submit (show summary)")
+  map(km.file_comment, M.add_file_comment, "Code review: add file comment")
+  map(km.cancel, M.cancel, "Code review: cancel review")
+  map(km.pause, M.pause, "Code review: pause session")
 end
 
 function M._apply_extmarks(bufnr)
