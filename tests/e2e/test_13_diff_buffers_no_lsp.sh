@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 # Test 13: diff buffers have no LSPs attached during a review
+# Covers: TST-LSP-0001
 # (prevents Marksman et al. from crashing when diffview closes the buffer)
 set -euo pipefail
 source "$(dirname "$0")/lib.sh"

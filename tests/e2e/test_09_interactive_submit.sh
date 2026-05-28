@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 # Test 09: Interactive submit (no NVIM_CODE_REVIEW_RESULT) → clipboard, no exit
+# Covers: TST-CLI-0005, TST-STO-0008
 set -euo pipefail
 source "$(dirname "$0")/lib.sh"
 

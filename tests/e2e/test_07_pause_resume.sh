@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 # Test 07: pause saves session, then it appears in CodeReviewSessions list
+# Covers: TST-SES-0001, TST-SES-0003
 set -euo pipefail
 source "$(dirname "$0")/lib.sh"
 

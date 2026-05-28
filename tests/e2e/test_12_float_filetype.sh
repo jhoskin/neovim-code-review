@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 # Test 12: comment input float uses filetype "codereview" (not "markdown")
+# Covers: TST-CMT-0010, TST-LSP-0002
 set -euo pipefail
 source "$(dirname "$0")/lib.sh"
 

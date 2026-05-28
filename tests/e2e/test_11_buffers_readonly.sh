@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 # Test 11: diff buffers are marked non-modifiable during a review
+# Covers: TST-DIF-0007
 set -euo pipefail
 source "$(dirname "$0")/lib.sh"
 
