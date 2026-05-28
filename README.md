@@ -63,15 +63,18 @@ Active during a review session (buffer-local on diff buffers):
 
 | Key | Action |
 |-----|--------|
-| `<leader>cc` | Add/edit line comment |
-| `<leader>cf` | Add/edit file comment |
-| `<leader>cv` | Set/edit verdict |
-| `<leader>cd` | Delete comment at cursor |
-| `<leader>cs` | Show summary and submit |
-| `<leader>cp` | Pause session (save for later) |
-| `<leader>cq` | Cancel review (discard, exit 2) |
+| `<leader>Rc` | Add/edit line comment |
+| `<leader>Rf` | Add/edit file comment |
+| `<leader>Rv` | Set/edit verdict |
+| `<leader>Rd` | Delete comment at cursor |
+| `<leader>Rs` | Show summary and submit |
+| `<leader>Rp` | Pause session (save for later) |
+| `<leader>Rq` | Cancel review (discard, exit 2 in agent mode) |
 | `<C-s>` | Confirm comment (in float) |
 | `q` | Cancel comment/summary (in float) |
+
+The capital `R` prefix avoids collision with LazyVim's `<leader>c*` code
+submenu. All keybindings are configurable via `setup({ keymaps = { ... } })`.
 
 All keybindings are configurable via `setup()`.
 
