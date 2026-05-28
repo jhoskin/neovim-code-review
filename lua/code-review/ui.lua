@@ -87,14 +87,17 @@ function M._detach_any_lsp(bufnr)
   })
 end
 
--- Stop every LSP client currently attached to bufnr (force shutdown).
--- Unlike buf_detach_client (which sends textDocument/didClose), this
--- sends shutdown/exit so servers like Marksman that crash on didClose
--- for synthetic paths don't blow up. Used for diffview's diff buffers
--- where a markdown file in the diff would otherwise attach Marksman.
--- Side effect: the LSP client process exits entirely. Other buffers
--- using the same client lose it until lspconfig re-attaches on next
--- FileType event.
+-- Stop every LSP client currently attached to bufnr via the graceful
+-- LSP `shutdown`/`exit` handshake. Unlike `buf_detach_client` (which
+-- sends `textDocument/didClose` per buffer, crashing servers like
+-- Marksman that try to re-read synthetic diffview URIs), and unlike
+-- force-stop (which SIGTERMs the process for exit code 143), this lets
+-- the server exit cleanly with code 0.
+--
+-- Used for diffview's diff buffers where a markdown file in the diff
+-- would otherwise attach Marksman. Side effect: the LSP client process
+-- exits entirely. Other buffers using the same client lose it until
+-- lspconfig re-attaches on the next FileType event.
 function M.stop_lsps(bufnr)
   if not bufnr or not vim.api.nvim_buf_is_valid(bufnr) then
     return
@@ -102,14 +105,15 @@ function M.stop_lsps(bufnr)
   local function stop_clients_for(b)
     local clients = (vim.lsp.get_clients or vim.lsp.get_active_clients)({ bufnr = b })
     for _, client in ipairs(clients) do
-      pcall(vim.lsp.stop_client, client.id, true)
+      -- force = false: send shutdown + exit, server terminates with code 0
+      pcall(vim.lsp.stop_client, client.id, false)
     end
   end
   stop_clients_for(bufnr)
   vim.api.nvim_create_autocmd("LspAttach", {
     buffer = bufnr,
     callback = function(args)
-      pcall(vim.lsp.stop_client, args.data.client_id, true)
+      pcall(vim.lsp.stop_client, args.data.client_id, false)
     end,
   })
 end
