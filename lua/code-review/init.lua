@@ -425,6 +425,13 @@ function M._layout_bufnr(layout_side)
   return nil
 end
 
+function M._make_readonly(bufnr)
+  if not bufnr or not vim.api.nvim_buf_is_valid(bufnr) then
+    return
+  end
+  vim.bo[bufnr].modifiable = false
+end
+
 function M._on_diff_buf_read()
   if not M._session then
     return
@@ -438,10 +445,12 @@ function M._on_diff_buf_read()
   if a_buf then
     M._set_keymaps(a_buf)
     M._apply_extmarks(a_buf)
+    M._make_readonly(a_buf)
   end
   if b_buf then
     M._set_keymaps(b_buf)
     M._apply_extmarks(b_buf)
+    M._make_readonly(b_buf)
   end
   if view.panel and view.panel.bufid then
     M._set_file_panel_keymaps(view.panel.bufid)
@@ -460,9 +469,11 @@ function M._on_diff_buf_win_enter()
   local b_buf = M._layout_bufnr(view.cur_layout.b)
   if a_buf then
     M._apply_extmarks(a_buf)
+    M._make_readonly(a_buf)
   end
   if b_buf then
     M._apply_extmarks(b_buf)
+    M._make_readonly(b_buf)
   end
 end
 

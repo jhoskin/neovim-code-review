@@ -14,8 +14,10 @@ M.defaults = {
     comment = { link = "Comment" },
     sign = { link = "DiagnosticInfo" },
     file_comment = { link = "Comment" },
+    file_sign = { link = "DiagnosticHint" },
   },
   sign_text = "●",
+  file_sign_text = "📄",
 }
 
 M.values = vim.deepcopy(M.defaults)
@@ -30,6 +32,7 @@ function M._define_highlights()
   vim.api.nvim_set_hl(0, "CodeReviewComment", vim.tbl_extend("force", { default = true }, hl.comment))
   vim.api.nvim_set_hl(0, "CodeReviewSign", vim.tbl_extend("force", { default = true }, hl.sign))
   vim.api.nvim_set_hl(0, "CodeReviewFileComment", vim.tbl_extend("force", { default = true }, hl.file_comment))
+  vim.api.nvim_set_hl(0, "CodeReviewFileSign", vim.tbl_extend("force", { default = true }, hl.file_sign))
 end
 
 return M

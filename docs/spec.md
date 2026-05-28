@@ -291,6 +291,13 @@ confirms the comment from any mode. `<Esc>` exits insert mode to normal mode
 without saving. Multi-line comments are supported; `<CR>` in normal mode
 retains its default behavior (cursor movement) so multi-line editing works.
 
+**Filetype**: The float buffer uses the custom filetype `codereview` (not
+`markdown`) so third-party LSP servers configured for `markdown` (e.g.,
+Marksman) do not attach to the transient scratch buffer and crash when it
+is deleted on confirm/cancel. The plugin sets `syntax = "markdown"`
+manually after the filetype is applied, so markdown highlighting (bold,
+code spans, fenced blocks) is still available inside the comment.
+
 **Logical identifiers**:
 
 | Logical ID            | Neovim object | Description                          |
@@ -359,13 +366,21 @@ to standard groups:
 vim.api.nvim_set_hl(0, "CodeReviewComment", { default = true, link = "Comment" })
 vim.api.nvim_set_hl(0, "CodeReviewSign", { default = true, link = "DiagnosticInfo" })
 vim.api.nvim_set_hl(0, "CodeReviewFileComment", { default = true, link = "Comment" })
+vim.api.nvim_set_hl(0, "CodeReviewFileSign", { default = true, link = "DiagnosticHint" })
 ```
 
 The `default = true` flag allows colorschemes and user config to override
 these without load-order issues.
 
-File-level comments show as a virtual line at the top of the file's diff buffer,
-using highlight group `CodeReviewFileComment`.
+**File-level comments** are rendered with two visual elements:
+
+1. A **virtual line above line 1** showing the comment text, using highlight
+   group `CodeReviewFileComment`.
+2. A **sign on line 1** (`📄`, configurable via
+   `config.file_sign_text`) using highlight group `CodeReviewFileSign`.
+   The sign is visible whenever line 1 is in view; this provides a
+   discoverable indicator even when the user is scrolled away from the
+   virtual line.
 
 **Buffer lifecycle**: diffview.nvim creates and destroys diff buffers as the
 user navigates files. Extmarks are buffer-local and are lost when a buffer is
@@ -737,6 +752,14 @@ B (equivalent to `git diff A...B`).
 system shall display the working tree as-is, without staging or stashing
 changes.
 
+**REQ-DIF-0007** (State-driven): While a review session is active, all
+diff buffers (both old and new sides, all diff types) shall be set
+non-modifiable so the user cannot accidentally edit the source files
+through the diff view. The plugin sets `vim.bo[bufnr].modifiable = false`
+on each diff buffer when it enters a window. Diffview's own staging
+actions, which mutate the working tree, are not affected because they do
+not write through the buffer.
+
 ### 6.2 Commenting (REQ-CMT)
 
 **REQ-CMT-0001** (Event-driven): When the user presses the add-comment
@@ -767,6 +790,13 @@ floating window without storing a comment.
 keybinding on a diff line that already has a comment, the system shall open the
 comment input float (SCR-COMMENT-01) pre-populated with the existing comment
 text, and on confirmation replace the existing comment.
+
+**REQ-CMT-0010** (Ubiquitous): The comment input float buffer shall have
+filetype `codereview` (not `markdown`) so third-party LSP servers
+configured for `markdown` (e.g., Marksman) do not attach to the transient
+scratch buffer and error when it is deleted. Syntax highlighting is
+provided by setting `syntax = "markdown"` directly on the buffer after
+the filetype is set.
 
 **REQ-CMT-0009** (Unwanted-behavior): If the user confirms the comment input
 float with an empty body (no non-whitespace characters), then the system shall
@@ -849,9 +879,12 @@ group, with the extmark logical ID `extmark.comment` (see REQ-CMT-0002).
 **REQ-UIX-0005** (Ubiquitous): All keybindings shall be user-configurable via
 the plugin's `setup()` function (see section 4.5).
 
-**REQ-UIX-0006** (Ubiquitous): The system shall render file-level comments as a
-virtual line at the top of the file's diff buffer using the
-`CodeReviewFileComment` highlight group.
+**REQ-UIX-0006** (Ubiquitous): The system shall render file-level comments
+with two visual elements on the file's diff buffer: a virtual line above
+line 1 showing the comment body (highlight `CodeReviewFileComment`), and
+a sign on line 1 (highlight `CodeReviewFileSign`). The sign is visible
+whenever line 1 is in view, providing a discoverable indicator
+independent of scroll position.
 
 **REQ-UIX-0007** (Event-driven): When the user quits Neovim without submitting
 a review, the system shall intercept the quit via `QuitPre`, allow the quit to
@@ -952,7 +985,9 @@ system shall delete the session file.
 | REQ-UIX-0003  | TST-UIX-0003  | Manual   | Add comment, verify virtual text rendered with `CodeReviewComment` highlight |
 | REQ-UIX-0004  | TST-UIX-0004  | Manual   | Add comment, verify sign column shows `●` with `CodeReviewSign` highlight |
 | REQ-UIX-0005  | TST-UIX-0005  | Manual   | Override keybinding in setup, verify new binding works |
-| REQ-UIX-0006  | TST-UIX-0006  | Manual   | Add file-level comment, verify virtual line at top of file's diff buffer with `CodeReviewFileComment` highlight |
+| REQ-UIX-0006  | TST-UIX-0006  | Auto     | Add file-level comment, verify both a virtual line above line 1 and a sign on line 1 (extmark with `sign_text`) are present in the namespace |
+| REQ-DIF-0007  | TST-DIF-0007  | Auto     | Start a working-tree review, verify both diff buffers have `modifiable = false` |
+| REQ-CMT-0010  | TST-CMT-0010  | Auto     | Open the comment input float, verify `vim.bo[buf].filetype` is `codereview` (not `markdown`) |
 | REQ-UIX-0007  | TST-UIX-0007  | Auto     | Quit Neovim without submitting, verify no review file created and exit code is 2 |
 | REQ-ERR-0001  | TST-ERR-0001  | Auto     | Invoke with empty range, verify exit code 1 and stderr message |
 | REQ-ERR-0002  | TST-ERR-0002  | Auto     | Remove git from PATH, invoke, verify exit code 1 |
