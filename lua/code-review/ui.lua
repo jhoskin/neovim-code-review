@@ -128,9 +128,12 @@ function M.open_comment_float(opts)
     end
   end
 
-  local km_opts = { buffer = buf, nowait = true }
-  vim.keymap.set({ "n", "i" }, config.values.keymaps.confirm_comment, confirm, km_opts)
-  vim.keymap.set("n", "q", cancel, km_opts)
+  vim.keymap.set({ "n", "i" }, config.values.keymaps.confirm_comment, confirm, {
+    buffer = buf, nowait = true, desc = "Code review: confirm comment",
+  })
+  vim.keymap.set("n", "q", cancel, {
+    buffer = buf, nowait = true, desc = "Code review: cancel comment",
+  })
 end
 
 function M.open_summary_float(store, on_confirm, on_cancel)
@@ -171,14 +174,14 @@ function M.open_summary_float(store, on_confirm, on_cancel)
     if on_confirm then
       on_confirm()
     end
-  end, { buffer = buf, nowait = true })
+  end, { buffer = buf, nowait = true, desc = "Code review: confirm submit" })
 
   vim.keymap.set("n", "q", function()
     close()
     if on_cancel then
       on_cancel()
     end
-  end, { buffer = buf, nowait = true })
+  end, { buffer = buf, nowait = true, desc = "Code review: cancel summary" })
 end
 
 function M._build_summary_lines(store)
