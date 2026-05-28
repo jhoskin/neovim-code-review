@@ -167,3 +167,22 @@ assert_json_valid() {
     return 1
   fi
 }
+
+# Save and restore the system clipboard around a test so it doesn't pollute
+# the user's clipboard. Call save_clipboard at test start and restore_clipboard
+# in a trap or at end.
+CLIPBOARD_BACKUP_FILE=""
+save_clipboard() {
+  if command -v pbpaste >/dev/null 2>&1; then
+    CLIPBOARD_BACKUP_FILE=$(mktemp -t cr-clip-backup.XXXXXX)
+    pbpaste > "$CLIPBOARD_BACKUP_FILE" 2>/dev/null || true
+  fi
+}
+
+restore_clipboard() {
+  if [ -n "$CLIPBOARD_BACKUP_FILE" ] && [ -f "$CLIPBOARD_BACKUP_FILE" ]; then
+    cat "$CLIPBOARD_BACKUP_FILE" | pbcopy 2>/dev/null || true
+    mv "$CLIPBOARD_BACKUP_FILE" "$CLIPBOARD_BACKUP_FILE.consumed" 2>/dev/null || true
+    CLIPBOARD_BACKUP_FILE=""
+  fi
+}

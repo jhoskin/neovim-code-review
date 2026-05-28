@@ -9,7 +9,8 @@ if ! command -v pbpaste >/dev/null 2>&1; then
 fi
 
 SESSION="cr-test-09"
-trap "cleanup_session $SESSION" EXIT
+save_clipboard
+trap "cleanup_session $SESSION; restore_clipboard" EXIT
 
 repo=$(bash "$(dirname "$0")/setup_repo.sh")
 echo "Test repo: $repo"

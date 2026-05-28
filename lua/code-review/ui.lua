@@ -154,8 +154,8 @@ function M.open_comment_float(opts)
   })
 end
 
-function M.open_summary_float(store, on_confirm, on_cancel)
-  local lines = M._build_summary_lines(store)
+function M.open_summary_float(store, on_confirm, on_cancel, preview_lines)
+  local lines = preview_lines or M._build_summary_lines(store)
   local buf = vim.api.nvim_create_buf(false, true)
   vim.bo[buf].buftype = "nofile"
   vim.bo[buf].modifiable = true
