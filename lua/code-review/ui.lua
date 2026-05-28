@@ -68,6 +68,27 @@ function M.reapply_from_store(bufnr, file_path, store, side)
   end
 end
 
+-- Detach every LSP client currently attached to bufnr. Also register an
+-- LspAttach autocmd so any client that attaches later is detached
+-- immediately. This protects transient scratch buffers (comment input,
+-- summary) from third-party LSPs that match on filetype heuristics or
+-- syntax even when our custom filetype is set.
+function M._detach_any_lsp(bufnr)
+  if not bufnr or not vim.api.nvim_buf_is_valid(bufnr) then
+    return
+  end
+  local clients = (vim.lsp.get_clients or vim.lsp.get_active_clients)({ bufnr = bufnr })
+  for _, client in ipairs(clients) do
+    pcall(vim.lsp.buf_detach_client, bufnr, client.id)
+  end
+  vim.api.nvim_create_autocmd("LspAttach", {
+    buffer = bufnr,
+    callback = function(args)
+      pcall(vim.lsp.buf_detach_client, bufnr, args.data.client_id)
+    end,
+  })
+end
+
 function M.open_comment_float(opts)
   opts = opts or {}
   local prefill = opts.prefill or ""
@@ -76,13 +97,16 @@ function M.open_comment_float(opts)
 
   local buf = vim.api.nvim_create_buf(false, true)
   vim.bo[buf].buftype = "nofile"
+  vim.bo[buf].bufhidden = "wipe"
   -- Use a non-standard filetype so third-party markdown LSPs (Marksman,
-  -- etc.) don't attach and crash when the transient buffer is deleted.
+  -- etc.) don't attach to the transient scratch buffer.
   vim.bo[buf].filetype = "codereview"
+  M._detach_any_lsp(buf)
   -- Apply markdown syntax highlighting manually (does not trigger LSP).
   pcall(vim.api.nvim_buf_call, buf, function()
     vim.cmd("setlocal syntax=markdown")
   end)
+  M._detach_any_lsp(buf)
 
   if prefill ~= "" then
     local lines = vim.split(prefill, "\n")
@@ -170,12 +194,15 @@ function M.open_summary_float(store, on_confirm, on_cancel, preview_lines)
   vim.bo[buf].modifiable = true
   vim.api.nvim_buf_set_lines(buf, 0, -1, false, lines)
   vim.bo[buf].modifiable = false
+  vim.bo[buf].bufhidden = "wipe"
   -- Custom filetype prevents markdown LSPs from attaching (see comment
   -- in open_comment_float).
   vim.bo[buf].filetype = "codereview"
+  M._detach_any_lsp(buf)
   pcall(vim.api.nvim_buf_call, buf, function()
     vim.cmd("setlocal syntax=markdown")
   end)
+  M._detach_any_lsp(buf)
 
   local width = math.min(100, math.floor(vim.o.columns * 0.8))
   local height = math.min(#lines + 2, math.floor(vim.o.lines * 0.8))
