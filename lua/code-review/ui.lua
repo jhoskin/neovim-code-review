@@ -83,6 +83,10 @@ function M.open_comment_float(opts)
   local width = math.min(80, math.floor(vim.o.columns * 0.6))
   local height = math.max(3, math.min(10, #vim.split(prefill, "\n") + 2))
 
+  local title = string.format(
+    " Comment — %s save · q cancel · <C-w>w leave (text preserved) ",
+    config.values.keymaps.confirm_comment
+  )
   local win = vim.api.nvim_open_win(buf, true, {
     relative = "cursor",
     row = 1,
@@ -91,7 +95,7 @@ function M.open_comment_float(opts)
     height = height,
     style = "minimal",
     border = "rounded",
-    title = " Comment ",
+    title = title,
     title_pos = "center",
   })
 
@@ -133,6 +137,20 @@ function M.open_comment_float(opts)
   })
   vim.keymap.set("n", "q", cancel, {
     buffer = buf, nowait = true, desc = "Code review: cancel comment",
+  })
+
+  -- Treat any other close (e.g. :q, <C-w>c) as cancel so we don't leak buffers
+  vim.api.nvim_create_autocmd("WinClosed", {
+    pattern = tostring(win),
+    once = true,
+    callback = function()
+      if vim.api.nvim_buf_is_valid(buf) then
+        vim.api.nvim_buf_delete(buf, { force = true })
+      end
+      if on_cancel then
+        on_cancel()
+      end
+    end,
   })
 end
 
@@ -182,6 +200,16 @@ function M.open_summary_float(store, on_confirm, on_cancel)
       on_cancel()
     end
   end, { buffer = buf, nowait = true, desc = "Code review: cancel summary" })
+
+  vim.api.nvim_create_autocmd("WinClosed", {
+    pattern = tostring(win),
+    once = true,
+    callback = function()
+      if vim.api.nvim_buf_is_valid(buf) then
+        vim.api.nvim_buf_delete(buf, { force = true })
+      end
+    end,
+  })
 end
 
 function M._build_summary_lines(store)
