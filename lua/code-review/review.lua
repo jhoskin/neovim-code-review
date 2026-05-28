@@ -17,7 +17,6 @@ function M.serialize(store, diff_info)
       base = diff_info.base_sha,
       head = diff_info.head_sha,
     },
-    verdict = store_data.verdict,
     files = store_data.files,
   }
 end

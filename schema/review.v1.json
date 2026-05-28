@@ -3,7 +3,7 @@
   "$id": "review.v1.json",
   "title": "Code Review",
   "type": "object",
-  "required": ["version", "id", "created_at", "diff_spec", "verdict", "files"],
+  "required": ["version", "id", "created_at", "diff_spec", "files"],
   "properties": {
     "version": {
       "type": "integer",
@@ -35,9 +35,6 @@
         }
       },
       "additionalProperties": false
-    },
-    "verdict": {
-      "type": ["string", "null"]
     },
     "files": {
       "type": "array",

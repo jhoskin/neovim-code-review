@@ -4,7 +4,6 @@ M.defaults = {
   keymaps = {
     add_comment = "<leader>Rc",
     file_comment = "<leader>Rf",
-    verdict = "<leader>Rv",
     delete_comment = "<leader>Rd",
     summary = "<leader>Rs",
     cancel = "<leader>Rq",

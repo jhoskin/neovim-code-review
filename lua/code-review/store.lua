@@ -4,7 +4,6 @@ Store.__index = Store
 function Store.new()
   return setmetatable({
     files = {},
-    verdict = nil,
   }, Store)
 end
 
@@ -33,11 +32,6 @@ function Store:add_file_comment(path, body)
   local file = self:_ensure_file(path)
   file.comment = body
   return true
-end
-
-function Store:set_verdict(text)
-  text = vim.trim(text or "")
-  self.verdict = text ~= "" and text or nil
 end
 
 function Store:delete_line_comment(path, lineno, side)
@@ -132,7 +126,7 @@ function Store:comment_count()
 end
 
 function Store:is_empty()
-  return self:comment_count() == 0 and self.verdict == nil
+  return self:comment_count() == 0
 end
 
 function Store:set_diff_hunk(path, lineno, side, hunk)
@@ -163,12 +157,10 @@ function Store:to_table()
   end
   return {
     files = files,
-    verdict = self.verdict,
   }
 end
 
 function Store:from_table(data)
-  self.verdict = data.verdict
   self.files = {}
   for _, file_data in ipairs(data.files or {}) do
     for _, line in ipairs(file_data.lines or {}) do

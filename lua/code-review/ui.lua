@@ -222,7 +222,6 @@ function M._build_summary_lines(store)
   add("# Review Summary")
   add("")
   add("Comments: " .. count)
-  add("Verdict: " .. (store.verdict or "(none)"))
   add("")
 
   for _, file_data in ipairs(store:get_all()) do
@@ -239,8 +238,8 @@ function M._build_summary_lines(store)
     add("")
   end
 
-  if count == 0 and not store.verdict then
-    add("(empty review — no comments or verdict)")
+  if count == 0 then
+    add("(empty review — no comments)")
   end
 
   return lines

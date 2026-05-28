@@ -26,7 +26,7 @@ sleep 2
 cat > /tmp/cr-add-comment.lua <<'EOF'
 local cr = require('code-review')
 cr._session.store:add_line_comment('greeting.txt', nil, 5, 'new', 'Test comment on line 5')
-cr._session.store:set_verdict('Looks good overall')
+cr._session.store:add_file_comment('greeting.txt', 'Overall this file needs a review pass')
 EOF
 send_cmd "$SESSION" "luafile /tmp/cr-add-comment.lua"
 sleep 1
@@ -43,15 +43,15 @@ exit_code=$(cat "$exit_file")
 review_path=$(cat "$result_file")
 [ -f "$review_path" ] || { echo "FAIL: review file missing"; exit 1; }
 
-# Verify the comment is in the JSON
+# Verify the comments are in the JSON
 comment=$(jq -r '.files[0].lines[0].body' "$review_path")
-verdict=$(jq -r '.verdict' "$review_path")
+file_comment=$(jq -r '.files[0].comment' "$review_path")
 path=$(jq -r '.files[0].path' "$review_path")
 line=$(jq -r '.files[0].lines[0].new_lineno' "$review_path")
 
 [ "$comment" = "Test comment on line 5" ] || { echo "FAIL: comment text wrong: $comment"; exit 1; }
-[ "$verdict" = "Looks good overall" ] || { echo "FAIL: verdict wrong: $verdict"; exit 1; }
+[ "$file_comment" = "Overall this file needs a review pass" ] || { echo "FAIL: file comment wrong: $file_comment"; exit 1; }
 [ "$path" = "greeting.txt" ] || { echo "FAIL: path wrong: $path"; exit 1; }
 [ "$line" = "5" ] || { echo "FAIL: line wrong: $line"; exit 1; }
 
-echo "PASS: line comment + verdict round-tripped through submit"
+echo "PASS: line + file comments round-tripped through submit"

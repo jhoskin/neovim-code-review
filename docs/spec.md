@@ -9,14 +9,14 @@ Date: 2026-05-26
 
 A local code review tool for reviewing LLM coding agent output inside Neovim.
 A coding agent launches Neovim into a diff view. The reviewer adds comments on
-diff lines, files, or the review as a whole. On exit, the review is persisted as
+diff lines or files. On exit, the review is persisted as
 a JSON file in a local audit trail directory. The agent reads the file and
 acts on the feedback.
 
 ### 1.2 Scope
 
 - Display diffs for working tree, branch, or commit range
-- Line-level, file-level, and review-level comments
+- Line-level and file-level comments
 - Persist reviews as JSON files in a local audit trail directory
 - Blocking CLI interface for agent invocation
 - JSON output readable by any tool that can read a file
@@ -28,6 +28,7 @@ acts on the feedback.
 - Structured approval workflow (no approve/reject/merge)
 - Multi-round review sessions (each session is independent)
 - Automatic staging or stashing of working tree changes
+- Structured verdict field (the reviewer's overall opinion goes in line or file comments)
 
 ## 2. Architecture
 
@@ -146,8 +147,6 @@ The example and field table below are informational.
     "head": null
   },
 
-  "verdict": "<free-form string or null>",
-
   "files": [
     {
       "path": "src/main.lua",
@@ -176,7 +175,6 @@ The example and field table below are informational.
 | `diff_spec.type` | enum | yes | One of `commit_range`, `branch`, `working_tree` |
 | `diff_spec.base` | string or null | yes | Full 40-character SHA of the base commit, resolved at review time. See diff_spec table below. |
 | `diff_spec.head` | string or null | yes | Full 40-character SHA of the head commit, resolved at review time. Null for working-tree reviews. |
-| `verdict` | string or null | yes | Free-form review summary |
 | `files` | array | yes | One entry per file with comments (empty array if no comments) |
 | `files[].path` | string | yes | File path relative to the repository root, using forward slashes as separators (e.g., `src/main.lua`). Never starts with `./` or `/`. Matches the format of `git diff --name-only`. |
 | `files[].comment` | string or null | yes | File-level comment |
@@ -214,7 +212,7 @@ unknown fields rather than treating them as errors. Producers shall not add
 fields outside the defined schema for the declared version.
 
 **Empty review**: When the user submits without commenting, the review is
-created with `verdict` null and `files` as an empty array. This signals
+created with `files` as an empty array. This signals
 "reviewed, no feedback" rather than "not reviewed."
 
 ### 3.3 Reading a review
@@ -329,7 +327,6 @@ Default mappings (user configurable):
 |--------------|----------------|-----------------------------------------|
 | `<leader>cc` | diff panel    | Add line comment at cursor              |
 | `<leader>cf` | file panel    | Add file-level comment for file under cursor (resolved via diffview's file-entry API or by parsing the file-panel buffer line) |
-| `<leader>cv` | any           | Set/edit review verdict                 |
 | `<leader>cd` | diff panel    | Delete comment at cursor                |
 | `<leader>cs` | any           | Show review summary and confirm         |
 | `<C-s>`      | comment float | Confirm comment (works in any mode)     |
@@ -452,7 +449,6 @@ require("code-review").setup({
   keymaps = {
     add_comment = "<leader>cc",
     file_comment = "<leader>cf",
-    verdict = "<leader>cv",
     delete_comment = "<leader>cd",
     summary = "<leader>cs",
     confirm_comment = "<C-s>",
@@ -505,7 +501,6 @@ after submission). The markdown format:
 ## Summary
 
 - Total comments: N
-- Verdict: <verdict text or "None">
 ````
 
 ### 4.8 Session management
@@ -517,7 +512,7 @@ Neovim does not exit. The user returns to their normal editing session.
 
 Session state includes:
 
-- All comments (line, file, verdict)
+- All comments (line and file)
 - The diff range (type, base, head)
 - The list of files with comments
 - Timestamp of creation and last modification
@@ -647,9 +642,9 @@ determined by whether `$NVIM_CODE_REVIEW_RESULT` is set:
   clipboard was populated
 - No exit code (Neovim does not exit)
 
-**Empty review**: An empty review (no comments, no verdict) follows the
+**Empty review**: An empty review (no comments) follows the
 same submit path as a non-empty review. The audit trail file is created
-with an empty `files` array and null `verdict`.
+with an empty `files` array.
 
 **Cancel, agent mode** (`$NVIM_CODE_REVIEW_RESULT` set):
 
@@ -756,11 +751,6 @@ an extmark per REQ-UIX-0003.
 keybinding, the system shall open a comment input float for the currently
 selected file.
 
-**REQ-CMT-0004** (Event-driven): When the user presses the verdict keybinding,
-the system shall open a comment input float (SCR-COMMENT-01) for the
-review-level verdict, pre-populated with the current verdict text if one
-exists.
-
 **REQ-CMT-0005** (Event-driven): When the user presses the delete-comment
 keybinding on a line with an existing comment, the system shall remove that
 comment from memory and remove the corresponding extmark.
@@ -808,8 +798,8 @@ the full unified-diff hunk (from `@@` header through the last line of the
 hunk) that contains the commented line, stored in the `diff_hunk` field.
 
 **REQ-STO-0006** (Event-driven): When the user exits without adding any
-comments or verdict, the system shall create a review file with an empty
-`files` array and null `verdict`.
+comments, the system shall create a review file with an empty
+`files` array.
 
 **REQ-STO-0007** (Ubiquitous): The review JSON `diff_spec` object shall
 record the diff type, the base revision (as full 40-character SHA), and the
@@ -842,8 +832,8 @@ needing the plugin installed.
 
 **REQ-UIX-0001** (Event-driven): When the user presses the summary keybinding,
 the system shall display a read-only summary (SCR-SUMMARY-01) listing all
-comments grouped by file path, with line numbers for line-level comments, the
-review verdict, and the total comment count, and wait for confirmation or
+comments grouped by file path, with line numbers for line-level comments and
+the total comment count, and wait for confirmation or
 cancellation.
 
 **REQ-UIX-0002** (Event-driven): When the user confirms the summary, the system
@@ -916,7 +906,7 @@ and close the diffview UI without exiting Neovim.
 for the current project in a floating window.
 
 **REQ-SES-0003** (Ubiquitous): Session state shall include all comments,
-the verdict, the diff range, and the timestamp of creation and last
+the diff range, and the timestamp of creation and last
 modification.
 
 **REQ-SES-0004** (Event-driven): When the user selects a session from the
@@ -939,7 +929,6 @@ system shall delete the session file.
 | REQ-CMT-0001  | TST-CMT-0001  | Manual   | Press add-comment key on diff line, verify float opens in insert mode |
 | REQ-CMT-0002  | TST-CMT-0002  | Manual   | Confirm comment, verify extmark appears below line with correct highlight |
 | REQ-CMT-0003  | TST-CMT-0003  | Manual   | Press file-comment key, verify float opens for file |
-| REQ-CMT-0004  | TST-CMT-0004  | Manual   | Press verdict key, verify float opens for verdict; press again, verify pre-populated |
 | REQ-CMT-0005  | TST-CMT-0005  | Manual   | Delete comment, verify extmark removed |
 | REQ-CMT-0006  | TST-CMT-0006  | Manual   | Enter multi-line comment, verify stored in JSON with line breaks and displayed as multi-line virtual text |
 | REQ-CMT-0007  | TST-CMT-0007  | Manual   | Open comment float, press q in normal mode, verify float closes with no comment stored |
@@ -950,7 +939,7 @@ system shall delete the session file.
 | REQ-STO-0003  | TST-STO-0003  | Auto     | Submit review, verify result file contains the absolute path to the review JSON |
 | REQ-STO-0004  | TST-STO-0004  | Auto     | Submit review, validate review JSON against JSON Schema |
 | REQ-STO-0005  | TST-STO-0005  | Auto     | Submit review with line comment, verify `diff_hunk` starts with `@@` header and contains the commented line |
-| REQ-STO-0006  | TST-STO-0006  | Auto     | Submit without commenting, verify review file exists with empty files and null verdict |
+| REQ-STO-0006  | TST-STO-0006  | Auto     | Submit without commenting, verify review file exists with empty files |
 | REQ-STO-0007  | TST-STO-0007  | Auto     | Submit review for each diff type, verify diff_spec fields contain resolved 40-char SHAs |
 | REQ-CLI-0001  | TST-CLI-0001  | Auto     | Invoke with each range format via `-c`, verify correct diff opens |
 | REQ-CLI-0002  | TST-CLI-0002  | Auto     | In agent mode, complete review, read result file, verify review file path written and nvim exited |
@@ -958,7 +947,7 @@ system shall delete the session file.
 | REQ-STO-0008  | TST-STO-0008  | Auto     | In interactive mode, submit a review with comments, verify clipboard contains markdown export |
 | REQ-CLI-0003  | TST-CLI-0003  | Manual   | Execute `:CodeReviewCopy`, verify system clipboard contains GitHub-flavored Markdown with correct structure |
 | REQ-CLI-0004  | TST-CLI-0004  | Auto     | Read review JSON file directly, verify valid JSON parseable without the plugin |
-| REQ-UIX-0001  | TST-UIX-0001  | Manual   | Press summary key, verify summary lists comments grouped by file with line numbers, verdict, and count |
+| REQ-UIX-0001  | TST-UIX-0001  | Manual   | Press summary key, verify summary lists comments grouped by file with line numbers and count |
 | REQ-UIX-0002  | TST-UIX-0002  | Manual   | Confirm summary, verify review saved and Neovim exits |
 | REQ-UIX-0003  | TST-UIX-0003  | Manual   | Add comment, verify virtual text rendered with `CodeReviewComment` highlight |
 | REQ-UIX-0004  | TST-UIX-0004  | Manual   | Add comment, verify sign column shows `●` with `CodeReviewSign` highlight |
@@ -976,7 +965,7 @@ system shall delete the session file.
 | REQ-ERR-0009  | TST-ERR-0009  | Auto     | Mock `diffview.lib` to omit `get_current_view`, verify exit code 1 and diagnostic naming diffview API |
 | REQ-SES-0001  | TST-SES-0001  | Manual   | Execute `:CodeReviewPause`, verify session file created in sessions directory and diffview UI closed |
 | REQ-SES-0002  | TST-SES-0002  | Manual   | Execute `:CodeReviewSessions`, verify floating window lists saved sessions with range, count, and date |
-| REQ-SES-0003  | TST-SES-0003  | Auto     | Pause a session, read the session JSON, verify it contains comments, verdict, diff range, and timestamps |
+| REQ-SES-0003  | TST-SES-0003  | Auto     | Pause a session, read the session JSON, verify it contains comments, diff range, and timestamps |
 | REQ-SES-0004  | TST-SES-0004  | Manual   | Pause a session with comments, resume from session list, verify diffview reopens with all comments restored |
 | REQ-SES-0005  | TST-SES-0005  | Auto     | Resume a paused session and submit, verify the session file is deleted from the sessions directory |
 
@@ -993,11 +982,10 @@ Each scenario must pass without modification to the test steps.
 1. Create a test repo with at least 3 commits.
 2. Run `NVIM_CODE_REVIEW_RESULT=$(mktemp) nvim -c 'CodeReview HEAD~2..HEAD'`.
 3. In the diff view, add a line comment on a changed line and a file comment.
-4. Set a verdict.
-5. Submit via `:CodeReviewSubmit`.
-6. Verify: exit code is 0, result file contains an absolute path to a JSON
+4. Submit via `:CodeReviewSubmit`.
+5. Verify: exit code is 0, result file contains an absolute path to a JSON
    file in the audit trail directory. Reading that file returns valid JSON
-   with the comment text, correct line numbers, and a non-null verdict.
+   with the comment text and correct line numbers.
 
 **AC-E2E-02: Agent review cycle (working tree)**
 
@@ -1011,9 +999,9 @@ Each scenario must pass without modification to the test steps.
 **AC-E2E-03: Empty review (no comments)**
 
 1. Run `NVIM_CODE_REVIEW_RESULT=$(mktemp) nvim -c 'CodeReview HEAD~1..HEAD'`.
-2. Submit without adding any comments or verdict.
+2. Submit without adding any comments.
 3. Verify: exit code 0, result file contains a file path, the review JSON has
-   an empty `files` array and null `verdict`.
+   an empty `files` array.
 
 **AC-E2E-04: User cancellation**
 
@@ -1033,8 +1021,8 @@ Each scenario must pass without modification to the test steps.
 1. Complete a review on a commit range.
 2. Read the review JSON file directly from the audit trail directory.
 3. Without the plugin installed, parse the JSON and extract: the diff type,
-   base and head SHAs, all file paths, all line numbers, all comment bodies,
-   and the verdict.
+   base and head SHAs, all file paths, all line numbers, and all comment
+   bodies.
 4. Verify: every field required by the schema in section 3.2 is present and
    parseable. No field requires the plugin or Neovim to interpret.
 
@@ -1044,7 +1032,7 @@ Each scenario must pass without modification to the test steps.
 2. Execute `:CodeReviewCopy`.
 3. Verify: system clipboard contains GitHub-flavored Markdown with headings
    per file, diff hunks in fenced code blocks, comment text, and a summary
-   section with total count and verdict.
+   section with total count.
 
 **AC-E2E-08: Session pause and resume**
 

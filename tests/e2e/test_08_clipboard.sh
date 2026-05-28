@@ -32,7 +32,6 @@ sleep 2
 cat > /tmp/cr-copy-comment.lua <<'EOF'
 local cr = require('code-review')
 cr._session.store:add_line_comment('greeting.txt', nil, 5, 'new', 'Clipboard test comment')
-cr._session.store:set_verdict('Looks good')
 EOF
 send_cmd "$SESSION" "luafile /tmp/cr-copy-comment.lua"
 sleep 1
@@ -61,13 +60,6 @@ if ! echo "$clipboard" | grep -q '`greeting.txt`'; then
   exit 1
 fi
 echo "File path as code: PASS"
-
-# The new format does NOT include the verdict in the export
-if echo "$clipboard" | grep -q "Looks good"; then
-  echo "FAIL: verdict should not appear in markdown export"
-  exit 1
-fi
-echo "Verdict excluded from export: PASS"
 
 # The new format does NOT include diff hunks
 if echo "$clipboard" | grep -qE '^@@.*@@'; then
