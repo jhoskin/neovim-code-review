@@ -70,9 +70,14 @@ end
 
 -- Detach every LSP client currently attached to bufnr. Also register an
 -- LspAttach autocmd so any client that attaches later is detached
--- immediately. This protects transient scratch buffers (comment input,
--- summary) from third-party LSPs that match on filetype heuristics or
--- syntax even when our custom filetype is set.
+-- immediately. Used for the comment/summary floats AND for diffview's
+-- diff buffers, where third-party LSPs (e.g. Marksman attaching to .md
+-- diff buffers) crash on close because diffview's synthetic buffer
+-- names don't resolve to real files on disk.
+function M.detach_lsps(bufnr)
+  M._detach_any_lsp(bufnr)
+end
+
 function M._detach_any_lsp(bufnr)
   if not bufnr or not vim.api.nvim_buf_is_valid(bufnr) then
     return

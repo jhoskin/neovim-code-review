@@ -432,6 +432,20 @@ function M._make_readonly(bufnr)
   vim.bo[bufnr].modifiable = false
 end
 
+-- Diffview's diff buffers represent files via synthetic names like
+-- `diffview:///path/to/repo/.git/:0:/README.md`. When a third-party LSP
+-- like Marksman attaches because the filetype is markdown, then tries
+-- to handle the buffer's close event, it errors because the path
+-- doesn't exist on disk. We detach LSPs from every diff buffer to
+-- avoid this. The user is reviewing the code, not editing it, so LSP
+-- features add no value here anyway.
+function M._strip_lsps(bufnr)
+  if not bufnr or not vim.api.nvim_buf_is_valid(bufnr) then
+    return
+  end
+  ui.detach_lsps(bufnr)
+end
+
 function M._on_diff_buf_read()
   if not M._session then
     return
@@ -446,11 +460,13 @@ function M._on_diff_buf_read()
     M._set_keymaps(a_buf)
     M._apply_extmarks(a_buf)
     M._make_readonly(a_buf)
+    M._strip_lsps(a_buf)
   end
   if b_buf then
     M._set_keymaps(b_buf)
     M._apply_extmarks(b_buf)
     M._make_readonly(b_buf)
+    M._strip_lsps(b_buf)
   end
   if view.panel and view.panel.bufid then
     M._set_file_panel_keymaps(view.panel.bufid)
@@ -470,10 +486,12 @@ function M._on_diff_buf_win_enter()
   if a_buf then
     M._apply_extmarks(a_buf)
     M._make_readonly(a_buf)
+    M._strip_lsps(a_buf)
   end
   if b_buf then
     M._apply_extmarks(b_buf)
     M._make_readonly(b_buf)
+    M._strip_lsps(b_buf)
   end
 end
 
