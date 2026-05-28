@@ -56,14 +56,15 @@ fi
 echo "Valid JSON: PASS"
 
 # Check empty review structure
-verdict=$(jq -r '.verdict' "$review_path")
 files=$(jq -r '.files | length' "$review_path")
-if [ "$verdict" != "null" ]; then
-  echo "FAIL: expected null verdict, got $verdict"
-  exit 1
-fi
 if [ "$files" != "0" ]; then
   echo "FAIL: expected 0 files, got $files"
+  exit 1
+fi
+# Verdict field should not exist in v1 schema
+has_verdict=$(jq 'has("verdict")' "$review_path")
+if [ "$has_verdict" = "true" ]; then
+  echo "FAIL: verdict field should not be in review JSON"
   exit 1
 fi
 echo "Empty review structure correct: PASS"

@@ -11,7 +11,7 @@ a JSON file. The agent reads the file and acts on your feedback.
 
 1. Agent runs `nvim -c 'CodeReview HEAD~3..HEAD'`
 2. Neovim opens with a diffview showing the changes
-3. You add line comments, file comments, and a verdict
+3. You add line comments and file comments
 4. You submit the review
 5. A JSON file is saved to the audit trail directory
 6. The file path is written to `$NVIM_CODE_REVIEW_RESULT` for the agent
@@ -65,7 +65,6 @@ Active during a review session (buffer-local on diff buffers):
 |-----|--------|
 | `<leader>Rc` | Add/edit line comment |
 | `<leader>Rf` | Add/edit file comment |
-| `<leader>Rv` | Set/edit verdict |
 | `<leader>Rd` | Delete comment at cursor |
 | `<leader>Rs` | Show summary and submit |
 | `<leader>Rp` | Pause session (save for later) |

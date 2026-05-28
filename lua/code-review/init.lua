@@ -232,21 +232,6 @@ function M.add_file_comment()
   })
 end
 
-function M.set_verdict()
-  if not M._session then
-    return
-  end
-
-  local prefill = M._session.store.verdict or ""
-
-  ui.open_comment_float({
-    prefill = prefill,
-    on_confirm = function(body)
-      M._session.store:set_verdict(body)
-    end,
-  })
-end
-
 function M.delete_comment()
   if not M._session then
     return
@@ -504,7 +489,6 @@ function M._set_keymaps(bufnr)
 
   map(km.add_comment, M.add_comment, "Code review: add line comment")
   map(km.delete_comment, M.delete_comment, "Code review: delete comment")
-  map(km.verdict, M.set_verdict, "Code review: set verdict")
   map(km.summary, M.submit, "Code review: submit (show summary)")
   map(km.file_comment, M.add_file_comment, "Code review: add file comment")
   map(km.cancel, M.cancel, "Code review: cancel review")
