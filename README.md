@@ -53,6 +53,7 @@ require("code-review").setup({})
 | `:CodeReview [range]` | Start a review session |
 | `:CodeReviewSubmit` | Show summary and submit |
 | `:CodeReviewPause` | Save session for later |
+| `:CodeReviewCancel` | Discard review, exit (code 2) |
 | `:CodeReviewSessions` | List and resume saved sessions |
 | `:CodeReviewCopy` | Export review as Markdown to clipboard |
 
@@ -67,6 +68,8 @@ Active during a review session (buffer-local on diff buffers):
 | `<leader>cv` | Set/edit verdict |
 | `<leader>cd` | Delete comment at cursor |
 | `<leader>cs` | Show summary and submit |
+| `<leader>cp` | Pause session (save for later) |
+| `<leader>cq` | Cancel review (discard, exit 2) |
 | `<C-s>` | Confirm comment (in float) |
 | `q` | Cancel comment/summary (in float) |
 

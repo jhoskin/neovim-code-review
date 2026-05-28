@@ -30,7 +30,11 @@ vim.opt.writebackup = false
 vim.g.mapleader = " "
 
 -- Load plugins
-require("diffview").setup({})
+require("diffview").setup({
+  use_icons = false,
+})
 require("code-review").setup({})
 
-print("code-review loaded. Try :CodeReview or :checkhealth code-review")
+if not vim.g.code_review_silent then
+  print("code-review loaded. Try :CodeReview or :checkhealth code-review")
+end

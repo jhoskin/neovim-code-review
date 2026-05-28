@@ -87,6 +87,21 @@ function M.submit()
   end, nil)
 end
 
+function M.cancel()
+  if not M._session then
+    return
+  end
+  local agent_mode = vim.env.NVIM_CODE_REVIEW_RESULT ~= nil
+    and vim.env.NVIM_CODE_REVIEW_RESULT ~= ""
+  M._cleanup()
+  pcall(vim.cmd, "DiffviewClose")
+  if agent_mode then
+    review.exit_cancel()
+  else
+    vim.notify("code-review: review cancelled")
+  end
+end
+
 function M.pause()
   if not M._session then
     return
@@ -313,16 +328,16 @@ function M._register_autocmds()
   vim.api.nvim_create_autocmd("User", {
     group = group,
     pattern = "DiffviewDiffBufRead",
-    callback = function(ev)
-      M._on_diff_buf_read(ev.buf)
+    callback = function()
+      M._on_diff_buf_read()
     end,
   })
 
   vim.api.nvim_create_autocmd("User", {
     group = group,
     pattern = "DiffviewDiffBufWinEnter",
-    callback = function(ev)
-      M._on_diff_buf_win_enter(ev.buf)
+    callback = function()
+      M._on_diff_buf_win_enter()
     end,
   })
 
@@ -331,10 +346,14 @@ function M._register_autocmds()
     pattern = "DiffviewViewClosed",
     callback = function()
       if M._session and not M._session.submitted then
+        local agent_mode = vim.env.NVIM_CODE_REVIEW_RESULT ~= nil
+          and vim.env.NVIM_CODE_REVIEW_RESULT ~= ""
         M._cleanup()
-        vim.schedule(function()
-          review.exit_cancel()
-        end)
+        if agent_mode then
+          vim.schedule(function()
+            review.exit_cancel()
+          end)
+        end
       end
     end,
   })
@@ -343,10 +362,14 @@ function M._register_autocmds()
     group = group,
     callback = function()
       if M._session and not M._session.submitted then
+        local agent_mode = vim.env.NVIM_CODE_REVIEW_RESULT ~= nil
+          and vim.env.NVIM_CODE_REVIEW_RESULT ~= ""
         M._cleanup()
-        vim.schedule(function()
-          review.exit_cancel()
-        end)
+        if agent_mode then
+          vim.schedule(function()
+            review.exit_cancel()
+          end)
+        end
       end
     end,
   })
@@ -362,6 +385,9 @@ function M._register_commands()
   vim.api.nvim_create_user_command("CodeReviewCopy", function()
     M.copy()
   end, {})
+  vim.api.nvim_create_user_command("CodeReviewCancel", function()
+    M.cancel()
+  end, {})
 end
 
 function M._cleanup()
@@ -369,22 +395,82 @@ function M._cleanup()
   pcall(vim.api.nvim_del_user_command, "CodeReviewSubmit")
   pcall(vim.api.nvim_del_user_command, "CodeReviewPause")
   pcall(vim.api.nvim_del_user_command, "CodeReviewCopy")
+  pcall(vim.api.nvim_del_user_command, "CodeReviewCancel")
   M._session = nil
 end
 
-function M._on_diff_buf_read(bufnr)
-  if not M._session then
-    return
+function M._layout_bufnr(layout_side)
+  if not layout_side then
+    return nil
   end
-  M._set_keymaps(bufnr)
-  M._apply_extmarks(bufnr)
+  if layout_side.file and layout_side.file.bufnr then
+    return layout_side.file.bufnr
+  end
+  if layout_side.id and vim.api.nvim_win_is_valid(layout_side.id) then
+    return vim.api.nvim_win_get_buf(layout_side.id)
+  end
+  return nil
 end
 
-function M._on_diff_buf_win_enter(bufnr)
+function M._on_diff_buf_read()
   if not M._session then
     return
   end
-  M._apply_extmarks(bufnr)
+  local view = M._get_view()
+  if not view or not view.cur_layout then
+    return
+  end
+  local a_buf = M._layout_bufnr(view.cur_layout.a)
+  local b_buf = M._layout_bufnr(view.cur_layout.b)
+  if a_buf then
+    M._set_keymaps(a_buf)
+    M._apply_extmarks(a_buf)
+  end
+  if b_buf then
+    M._set_keymaps(b_buf)
+    M._apply_extmarks(b_buf)
+  end
+  if view.panel and view.panel.bufid then
+    M._set_file_panel_keymaps(view.panel.bufid)
+  end
+end
+
+function M._on_diff_buf_win_enter()
+  if not M._session then
+    return
+  end
+  local view = M._get_view()
+  if not view or not view.cur_layout then
+    return
+  end
+  local a_buf = M._layout_bufnr(view.cur_layout.a)
+  local b_buf = M._layout_bufnr(view.cur_layout.b)
+  if a_buf then
+    M._apply_extmarks(a_buf)
+  end
+  if b_buf then
+    M._apply_extmarks(b_buf)
+  end
+end
+
+function M._set_file_panel_keymaps(bufnr)
+  if not bufnr or not vim.api.nvim_buf_is_valid(bufnr) then
+    return
+  end
+  local km = config.values.keymaps
+  local opts = { buffer = bufnr, nowait = true }
+  vim.keymap.set("n", km.file_comment, function()
+    M.add_file_comment()
+  end, opts)
+  vim.keymap.set("n", km.summary, function()
+    M.submit()
+  end, opts)
+  vim.keymap.set("n", km.cancel, function()
+    M.cancel()
+  end, opts)
+  vim.keymap.set("n", km.pause, function()
+    M.pause()
+  end, opts)
 end
 
 function M._set_keymaps(bufnr)
@@ -405,6 +491,12 @@ function M._set_keymaps(bufnr)
   end, opts)
   vim.keymap.set("n", km.file_comment, function()
     M.add_file_comment()
+  end, opts)
+  vim.keymap.set("n", km.cancel, function()
+    M.cancel()
+  end, opts)
+  vim.keymap.set("n", km.pause, function()
+    M.pause()
   end, opts)
 end
 
@@ -463,10 +555,13 @@ function M._buf_context(view, bufnr)
     return nil, nil
   end
 
+  local a_buf = M._layout_bufnr(view.cur_layout.a)
+  local b_buf = M._layout_bufnr(view.cur_layout.b)
+
   local side
-  if view.cur_layout.a and view.cur_layout.a.bufnr == bufnr then
+  if a_buf == bufnr then
     side = "old"
-  elseif view.cur_layout.b and view.cur_layout.b.bufnr == bufnr then
+  elseif b_buf == bufnr then
     side = "new"
   else
     return nil, nil
