@@ -7,6 +7,8 @@ M.defaults = {
     verdict = "<leader>cv",
     delete_comment = "<leader>cd",
     summary = "<leader>cs",
+    cancel = "<leader>cq",
+    pause = "<leader>cp",
     confirm_comment = "<C-s>",
   },
   highlights = {

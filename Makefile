@@ -1,10 +1,14 @@
 NVIM ?= nvim
 
-.PHONY: test health lint clean
+.PHONY: test test-e2e health lint clean
 
-# Launch Neovim with the minimal test config
+# Launch Neovim with the minimal test config (interactive)
 test:
 	$(NVIM) -u tests/minimal_init.lua
+
+# Run the end-to-end test suite (tmux-driven)
+test-e2e:
+	bash tests/e2e/run_all.sh
 
 # Run health check in headless mode
 health:

@@ -4,6 +4,7 @@
 # TRASH directories (rm-replacement convention)
 TRASH/
 TRASH-*/
+TRASH-FILES.md
 
 # Backup files
 *.bak
