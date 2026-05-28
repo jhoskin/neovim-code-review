@@ -28,14 +28,17 @@ end
 
 function M.render_file_comment(bufnr, body)
   local ns = M.create_namespace()
+  local sign_text = config.values.file_sign_text or "📄"
   local virt_lines = {}
   for _, text_line in ipairs(vim.split(body, "\n")) do
-    table.insert(virt_lines, { { "📄 " .. text_line, "CodeReviewFileComment" } })
+    table.insert(virt_lines, { { sign_text .. " " .. text_line, "CodeReviewFileComment" } })
   end
 
   return vim.api.nvim_buf_set_extmark(bufnr, ns, 0, 0, {
     virt_lines = virt_lines,
     virt_lines_above = true,
+    sign_text = sign_text,
+    sign_hl_group = "CodeReviewFileSign",
   })
 end
 
@@ -73,7 +76,13 @@ function M.open_comment_float(opts)
 
   local buf = vim.api.nvim_create_buf(false, true)
   vim.bo[buf].buftype = "nofile"
-  vim.bo[buf].filetype = "markdown"
+  -- Use a non-standard filetype so third-party markdown LSPs (Marksman,
+  -- etc.) don't attach and crash when the transient buffer is deleted.
+  vim.bo[buf].filetype = "codereview"
+  -- Apply markdown syntax highlighting manually (does not trigger LSP).
+  pcall(vim.api.nvim_buf_call, buf, function()
+    vim.cmd("setlocal syntax=markdown")
+  end)
 
   if prefill ~= "" then
     local lines = vim.split(prefill, "\n")
