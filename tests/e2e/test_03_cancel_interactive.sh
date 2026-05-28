@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 # Test 03: :CodeReviewCancel (interactive) should NOT exit nvim
+# Covers: TST-CLI-0006
 set -euo pipefail
 source "$(dirname "$0")/lib.sh"
 

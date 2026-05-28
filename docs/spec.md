@@ -488,35 +488,42 @@ session is active. It is equivalent to pressing the summary keybinding
 ### 4.7 `:CodeReviewCopy` command
 
 `:CodeReviewCopy` exports the current review as GitHub-flavored Markdown to
-the system clipboard. Available during an active review session (before or
-after submission). The markdown format:
+the system clipboard. Available during an active review session. The export
+is designed for pasting into an LLM chat, so it captures only the reviewer's
+comments. It deliberately omits diff hunks (the agent already has the diff)
+and any review-level metadata. The format:
 
 ````markdown
-# Code Review: <range>
+# Code Review Comments
 
-- Base: `<base-sha>`
-- Compare: `<head-sha>`
-- Date: YYYY-MM-DD HH:MM:SS
-- Files with comments: N/M
+A human reviewer left the following comments on a code change. Each
+comment is anchored to either a file or a specific line within a
+file. File paths are relative to the repository root. Line-level
+comments include the line number and the side of the diff:
 
-## src/example.lua (Modified)
+- **new** — line in the post-change version of the file
+- **old** — line in the pre-change version of the file
 
-### Line 42 (new)
+Use these comments to understand what the reviewer wants changed,
+clarified, or kept as-is in the next iteration.
 
-```diff
-@@ -40,7 +40,9 @@
- context line
-+added line
-```
+## `src/example.lua`
 
-**Comment:** The comment text here.
+Overall this file needs a refactor.
 
----
+- **Line 42 (new)**
+  This validation looks incomplete. Need HMAC verification.
+- **Line 47 (new)**
+  This needs a comment explaining the magic number.
 
-## Summary
+## `tests/test_example.py`
 
-- Total comments: N
+- **Line 10 (old)**
+  Why was this assertion removed?
 ````
+
+If the review has no comments, the body is `(The reviewer left no
+comments.)` after the preamble.
 
 ### 4.8 Session management
 
@@ -642,9 +649,11 @@ determined by whether `$NVIM_CODE_REVIEW_RESULT` is set:
 
 - Write the review JSON to the audit trail directory (section 3.1)
 - Write the audit trail file path to `$NVIM_CODE_REVIEW_RESULT`
-- Force-quit Neovim (modified diff buffers are discarded; the spec
-  forbids modifying source files during a review, so no real data is
-  lost)
+- Force-quit Neovim via `:quitall!`. The `!` is required because
+  diffview's right-side buffer in a working-tree review is the live
+  editable file on disk, which Neovim flags as modified even though
+  REQ-DIF-0007 makes the buffer non-modifiable from the user's
+  perspective. A plain `:quitall` would prompt to save.
 - Exit code: 0
 
 **Submit, interactive mode** (`$NVIM_CODE_REVIEW_RESULT` unset):
@@ -851,12 +860,33 @@ interactive mode (`$NVIM_CODE_REVIEW_RESULT` is unset), the system shall
 close diffview and leave Neovim running, without exiting.
 
 **REQ-CLI-0003** (Event-driven): When the user executes `:CodeReviewCopy`,
-the system shall export the current review as GitHub-flavored Markdown to
-the system clipboard.
+the system shall export the current review as GitHub-flavored Markdown
+(format defined in section 4.7) to the system clipboard, containing only
+the reviewer's comments (no diff hunks, no metadata).
 
 **REQ-CLI-0004** (Ubiquitous): The review JSON shall be self-contained: any
 consumer shall be able to read the review by parsing the JSON file without
 needing the plugin installed.
+
+**REQ-CLI-0006** (Event-driven): When the user executes `:CodeReviewCancel`
+during an active review session, the system shall discard all in-memory
+comments, close diffview, and:
+- In agent mode (`$NVIM_CODE_REVIEW_RESULT` set), exit Neovim with code 2.
+- In interactive mode, leave Neovim running and display a `vim.notify`
+  message confirming the cancellation.
+
+**REQ-CLI-0007** (Event-driven): When the user executes `:CodeReviewPause`
+during an active review session, the system shall save the session JSON
+(per REQ-SES-0003) to the sessions directory, close diffview, leave
+Neovim running, and display a `vim.notify` message containing the saved
+session ID.
+
+**REQ-CLI-0008** (Ubiquitous): The plugin shall register four user commands
+that are only valid during an active review session: `:CodeReviewSubmit`,
+`:CodeReviewCancel`, `:CodeReviewPause`, `:CodeReviewCopy`. These commands
+shall be removed from the command list when no session is active. The
+always-available commands `:CodeReview` and `:CodeReviewSessions` are
+registered at plugin load.
 
 ### 6.5 UI interaction (REQ-UIX)
 
@@ -889,6 +919,22 @@ independent of scroll position.
 **REQ-UIX-0007** (Event-driven): When the user quits Neovim without submitting
 a review, the system shall intercept the quit via `QuitPre`, allow the quit to
 proceed, create no review file, and exit with code 2 (see section 4.9).
+
+**REQ-UIX-0008** (Ubiquitous): Default keybindings shall use the `<leader>R`
+prefix (Review) to avoid collision with common LazyVim/which-key
+`<leader>c*` (code) bindings. Defaults: `<leader>Rc` (add line comment),
+`<leader>Rf` (file comment), `<leader>Rd` (delete comment), `<leader>Rs`
+(submit / show summary), `<leader>Rq` (cancel), `<leader>Rp` (pause), and
+`<C-s>` (confirm comment in float). All keybindings are configurable via
+`setup({ keymaps = { ... } })` (see REQ-UIX-0005).
+
+**REQ-UIX-0009** (Event-driven): When the user invokes submit (via
+`<leader>Rs` or `:CodeReviewSubmit`), the summary float (SCR-SUMMARY-01)
+shall display the exact Markdown that would be exported on confirmation
+(per section 4.7), preceded by a one-line mode note describing the effect
+of confirming (e.g., "Confirming will copy the markdown below to your
+clipboard and close the review" in interactive mode, "Confirming will
+write to the result file and exit Neovim" in agent mode).
 
 ### 6.6 Error handling (REQ-ERR)
 
@@ -949,6 +995,43 @@ the saved range and restoring all comments.
 **REQ-SES-0005** (Event-driven): When a resumed session is submitted, the
 system shall delete the session file.
 
+**REQ-SES-0006** (Event-driven): When the user executes `:CodeReviewSessions`
+and one or more sessions exist, the system shall present a `vim.ui.select`
+picker where each entry displays: the first 8 characters of the session ID,
+the diff range string, the comment count, and the last modified timestamp.
+When the user selects an entry, the system shall resume that session.
+
+### 6.8 LSP handling (REQ-LSP)
+
+Third-party LSP clients configured for `markdown` (such as Marksman) can
+crash when diffview closes a `.md` diff buffer, because diffview's
+synthetic buffer URI (`diffview:///path/.git/:0:/README.md`) does not
+resolve to a real file on disk and the LSP's `textDocument/didClose`
+handler may attempt to re-read the file. This category of requirements
+isolates the plugin's diff buffers and floats from such LSPs.
+
+**REQ-LSP-0001** (State-driven): While a review session is active, for
+every diff buffer the plugin sees (via `DiffviewDiffBufRead` and
+`DiffviewDiffBufWinEnter`), the plugin shall force-stop every LSP client
+currently attached to that buffer using `vim.lsp.stop_client(client_id,
+true)`. Force-stop sends `shutdown`/`exit` to the server process rather
+than per-buffer `textDocument/didClose`, avoiding the crash. The plugin
+shall also register a buffer-local `LspAttach` autocmd that force-stops
+any LSP that attaches later.
+
+**REQ-LSP-0002** (Ubiquitous): The comment input float (SCR-COMMENT-01)
+and the summary float (SCR-SUMMARY-01) shall use the custom filetype
+`codereview` (not `markdown`) so third-party markdown LSPs do not attach
+in the first place. Syntax highlighting is provided by setting
+`syntax = "markdown"` manually after the filetype is set.
+
+**REQ-LSP-0003** (Ubiquitous): As a defense-in-depth measure, after the
+filetype is set on a float buffer, the plugin shall detach any LSP
+clients that did attach (via `vim.lsp.buf_detach_client`) and register a
+buffer-local `LspAttach` autocmd to detach any client that attaches
+later. Detach is safe for floats (the buffer is transient and the URI is
+not on disk to begin with), unlike for diff buffers.
+
 ## 7. Verification Matrix
 
 | Requirement   | Test ID       | Method   | Description |
@@ -1003,6 +1086,15 @@ system shall delete the session file.
 | REQ-SES-0003  | TST-SES-0003  | Auto     | Pause a session, read the session JSON, verify it contains comments, diff range, and timestamps |
 | REQ-SES-0004  | TST-SES-0004  | Manual   | Pause a session with comments, resume from session list, verify diffview reopens with all comments restored |
 | REQ-SES-0005  | TST-SES-0005  | Auto     | Resume a paused session and submit, verify the session file is deleted from the sessions directory |
+| REQ-SES-0006  | TST-SES-0006  | Manual   | Pause two sessions, run `:CodeReviewSessions`, verify selection picker shows both with id-prefix, range, count, and timestamp; select one, verify it resumes |
+| REQ-CLI-0006  | TST-CLI-0006  | Auto     | In interactive mode, start review and run `:CodeReviewCancel`, verify nvim stays running and a notification is shown; in agent mode, verify exit code 2 |
+| REQ-CLI-0007  | TST-CLI-0007  | Auto     | Start review, run `:CodeReviewPause`, verify session JSON written and `vim.notify` message contains the session ID |
+| REQ-CLI-0008  | TST-CLI-0008  | Auto     | Before session, verify `:CodeReviewSubmit` does not exist; start session, verify it exists; end session, verify it is removed |
+| REQ-UIX-0008  | TST-UIX-0008  | Auto     | Verify `vim.api.nvim_buf_get_keymap()` on a diff buffer contains the documented default keys (`<leader>Rc`, `<leader>Rs`, etc.) |
+| REQ-UIX-0009  | TST-UIX-0009  | Auto     | Trigger `:CodeReviewSubmit`, capture the summary float content, verify it includes the markdown preamble from section 4.7 |
+| REQ-LSP-0001  | TST-LSP-0001  | Auto     | Start a review in a repo whose diff contains a `.md` file, verify no LSPs are attached to the diff buffers (covered by `test_13_diff_buffers_no_lsp.sh`) |
+| REQ-LSP-0002  | TST-LSP-0002  | Auto     | Open the comment float and summary float, verify both have filetype `codereview` (covered by `test_12_float_filetype.sh`) |
+| REQ-LSP-0003  | TST-LSP-0003  | Auto     | Open the comment float, verify no LSPs are attached after the filetype is set |
 
 ## 8. Acceptance Criteria
 

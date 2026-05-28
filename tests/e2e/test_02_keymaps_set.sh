@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 # Test 02: keymaps are registered on diff buffers after DiffviewDiffBufRead fires
+# Covers: TST-UIX-0008
 set -euo pipefail
 source "$(dirname "$0")/lib.sh"
 

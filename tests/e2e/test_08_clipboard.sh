@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 # Test 08: CodeReviewCopy populates clipboard with markdown
+# Covers: TST-CLI-0003, TST-STO-0008
 set -euo pipefail
 source "$(dirname "$0")/lib.sh"
 

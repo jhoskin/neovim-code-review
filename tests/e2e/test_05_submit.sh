@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 # Test 05: submit creates JSON file and exits with code 0
+# Covers: TST-STO-0001, TST-STO-0003, TST-STO-0004, TST-STO-0006, TST-CLI-0002, TST-CLI-0004
 set -euo pipefail
 source "$(dirname "$0")/lib.sh"
 

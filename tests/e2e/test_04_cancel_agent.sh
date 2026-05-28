@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 # Test 04: :CodeReviewCancel (agent mode) should exit nvim with code 2
+# Covers: TST-CLI-0006
 set -euo pipefail
 source "$(dirname "$0")/lib.sh"
 

@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 # Test 10: file-level comment renders both a virtual line and a sign on line 1
+# Covers: TST-UIX-0006
 set -euo pipefail
 source "$(dirname "$0")/lib.sh"
 

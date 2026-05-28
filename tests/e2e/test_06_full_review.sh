@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 # Test 06: Add a line comment via keymap, submit, verify in JSON output
+# Covers: TST-STO-0001, TST-STO-0004, TST-CLI-0002
 set -euo pipefail
 source "$(dirname "$0")/lib.sh"
 

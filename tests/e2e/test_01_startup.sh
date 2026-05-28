@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 # Test 01: :CodeReview opens diffview
+# Covers: TST-DIF-0001, TST-CLI-0001
 set -euo pipefail
 source "$(dirname "$0")/lib.sh"
 
