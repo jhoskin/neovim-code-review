@@ -14,22 +14,34 @@ send_cmd "$SESSION" "CodeReview"
 wait_for "$SESSION" "greeting.txt" 5
 sleep 2
 
-# Open a comment float programmatically and inspect its buffer
+# Check both the comment float AND the summary float
 cat > /tmp/cr-float-check.lua <<'EOF'
 local ui = require('code-review.ui')
+local Store = require('code-review.store')
+
+-- 1. Comment float
 ui.open_comment_float({
   prefill = "test",
   on_confirm = function() end,
   on_cancel = function() end,
 })
--- After open, the current buffer is the comment float
-local buf = vim.api.nvim_get_current_buf()
-local lines = {
-  'bufnr=' .. tostring(buf),
-  'filetype=' .. tostring(vim.bo[buf].filetype),
-  'buftype=' .. tostring(vim.bo[buf].buftype),
-}
-vim.fn.writefile(lines, '/tmp/cr-float-check.txt')
+local comment_buf = vim.api.nvim_get_current_buf()
+local comment_ft = vim.bo[comment_buf].filetype
+-- Close it
+vim.api.nvim_win_close(0, true)
+
+-- 2. Summary float
+local store = Store.new()
+store:add_line_comment('foo.txt', nil, 1, 'new', 'sample')
+ui.open_summary_float(store, function() end, function() end)
+local summary_buf = vim.api.nvim_get_current_buf()
+local summary_ft = vim.bo[summary_buf].filetype
+vim.api.nvim_win_close(0, true)
+
+vim.fn.writefile({
+  'comment_ft=' .. tostring(comment_ft),
+  'summary_ft=' .. tostring(summary_ft),
+}, '/tmp/cr-float-check.txt')
 EOF
 
 mv /tmp/cr-float-check.txt /tmp/cr-float-check.txt.bak 2>/dev/null || true
@@ -46,11 +58,21 @@ echo "--- check ---"
 cat /tmp/cr-float-check.txt
 echo "--- end ---"
 
-filetype=$(grep '^filetype=' /tmp/cr-float-check.txt | cut -d= -f2)
+comment_ft=$(grep '^comment_ft=' /tmp/cr-float-check.txt | cut -d= -f2)
+summary_ft=$(grep '^summary_ft=' /tmp/cr-float-check.txt | cut -d= -f2)
 
-if [ "$filetype" = "codereview" ]; then
-  echo "PASS: comment float filetype is 'codereview' (LSP-safe)"
+ok=true
+if [ "$comment_ft" != "codereview" ]; then
+  echo "FAIL: comment float filetype is '$comment_ft', expected 'codereview'"
+  ok=false
+fi
+if [ "$summary_ft" != "codereview" ]; then
+  echo "FAIL: summary float filetype is '$summary_ft', expected 'codereview'"
+  ok=false
+fi
+
+if [ "$ok" = "true" ]; then
+  echo "PASS: both floats use 'codereview' filetype (LSP-safe)"
 else
-  echo "FAIL: expected filetype 'codereview', got '$filetype'"
   exit 1
 fi

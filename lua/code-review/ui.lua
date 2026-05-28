@@ -170,7 +170,12 @@ function M.open_summary_float(store, on_confirm, on_cancel, preview_lines)
   vim.bo[buf].modifiable = true
   vim.api.nvim_buf_set_lines(buf, 0, -1, false, lines)
   vim.bo[buf].modifiable = false
-  vim.bo[buf].filetype = "markdown"
+  -- Custom filetype prevents markdown LSPs from attaching (see comment
+  -- in open_comment_float).
+  vim.bo[buf].filetype = "codereview"
+  pcall(vim.api.nvim_buf_call, buf, function()
+    vim.cmd("setlocal syntax=markdown")
+  end)
 
   local width = math.min(100, math.floor(vim.o.columns * 0.8))
   local height = math.min(#lines + 2, math.floor(vim.o.lines * 0.8))
