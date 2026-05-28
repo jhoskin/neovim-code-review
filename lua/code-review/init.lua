@@ -438,10 +438,11 @@ end
 -- to handle the buffer's close event, it errors because the path
 -- doesn't exist on disk. Worse: detaching with `buf_detach_client`
 -- sends textDocument/didClose, which IS the call that crashes
--- Marksman. So we force-stop the client process (sends shutdown/exit
--- instead of didClose) on any LSP that attaches to a diff buffer.
--- Side effect: the user's other markdown buffers lose Marksman until
--- lspconfig re-attaches on the next FileType event.
+-- Marksman. So we gracefully stop the client process (sends LSP
+-- shutdown+exit, server exits with code 0) on any LSP that attaches
+-- to a diff buffer. See ui.stop_lsps (REQ-LSP-0001). Side effect:
+-- the user's other markdown buffers lose the LSP until lspconfig
+-- re-attaches on the next FileType event.
 function M._strip_lsps(bufnr)
   if not bufnr or not vim.api.nvim_buf_is_valid(bufnr) then
     return
