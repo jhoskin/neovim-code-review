@@ -41,28 +41,39 @@ send_cmd "$SESSION" "CodeReviewCopy"
 sleep 1
 
 clipboard=$(pbpaste)
-if echo "$clipboard" | grep -q "Clipboard test comment"; then
-  echo "Comment in clipboard: PASS"
-else
+if ! echo "$clipboard" | grep -q "Clipboard test comment"; then
   echo "FAIL: comment not in clipboard"
   echo "--- clipboard ---"
   echo "$clipboard"
   echo "--- end ---"
   exit 1
 fi
+echo "Comment in clipboard: PASS"
 
-if echo "$clipboard" | grep -q "Looks good"; then
-  echo "Verdict in clipboard: PASS"
-else
-  echo "FAIL: verdict not in clipboard"
-  exit 1
-fi
-
-if echo "$clipboard" | grep -q "^# Code Review:"; then
-  echo "Markdown heading present: PASS"
-else
+if ! echo "$clipboard" | grep -q "^# Code Review Comments"; then
   echo "FAIL: missing markdown heading"
   exit 1
 fi
+echo "Markdown heading present: PASS"
 
-echo "PASS: CodeReviewCopy populates clipboard with markdown"
+if ! echo "$clipboard" | grep -q '`greeting.txt`'; then
+  echo "FAIL: file path not formatted as code"
+  exit 1
+fi
+echo "File path as code: PASS"
+
+# The new format does NOT include the verdict in the export
+if echo "$clipboard" | grep -q "Looks good"; then
+  echo "FAIL: verdict should not appear in markdown export"
+  exit 1
+fi
+echo "Verdict excluded from export: PASS"
+
+# The new format does NOT include diff hunks
+if echo "$clipboard" | grep -qE '^@@.*@@'; then
+  echo "FAIL: diff hunks should not appear in markdown export"
+  exit 1
+fi
+echo "Diff hunks excluded from export: PASS"
+
+echo "PASS: CodeReviewCopy populates clipboard with clean markdown"

@@ -61,11 +61,25 @@ if ! echo "$clipboard" | grep -q "Interactive submit test"; then
 fi
 echo "Clipboard contains comment: PASS"
 
-if ! echo "$clipboard" | grep -q "Ship it"; then
-  echo "FAIL: clipboard does not contain verdict"
+# Verdict should NOT appear in the markdown export (new format)
+if echo "$clipboard" | grep -q "Ship it"; then
+  echo "FAIL: verdict leaked into clipboard markdown"
   exit 1
 fi
-echo "Clipboard contains verdict: PASS"
+echo "Verdict excluded from markdown: PASS"
+
+# Audit trail file should still contain the verdict
+audit_dir="$HOME/.local/share/nvim/code-review"
+recent_review=$(find "$audit_dir" -maxdepth 2 -name '*.json' -not -path '*/sessions/*' -newer /tmp/cr-interactive-comment.lua 2>/dev/null | head -1)
+if [ -n "$recent_review" ]; then
+  audit_verdict=$(jq -r '.verdict' "$recent_review")
+  if [ "$audit_verdict" = "Ship it" ]; then
+    echo "Verdict preserved in audit trail JSON: PASS"
+  else
+    echo "FAIL: verdict missing from audit trail: $audit_verdict"
+    exit 1
+  fi
+fi
 
 # Verify audit trail file exists
 audit_dir="$HOME/.local/share/nvim/code-review"
