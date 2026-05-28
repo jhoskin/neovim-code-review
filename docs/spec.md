@@ -617,22 +617,52 @@ variable is unset, the plugin writes to `$TMPDIR/nvim-code-review-result`
 contains the absolute path to the review JSON file as a single line, with
 no trailing newline.
 
-**Normal exit** (review submitted, with or without comments):
+The submit and cancel behavior depends on the **invocation mode**, which is
+determined by whether `$NVIM_CODE_REVIEW_RESULT` is set:
 
-- Write the review file path to the result file
+- **Agent mode**: `$NVIM_CODE_REVIEW_RESULT` is set in the environment.
+  Neovim was launched by an agent that is blocked waiting for the review.
+  Submit and cancel must signal completion by exiting Neovim with a
+  meaningful exit code so the agent can react.
+- **Interactive mode**: `$NVIM_CODE_REVIEW_RESULT` is unset. The user
+  launched the review themselves from an existing Neovim session. Submit
+  and cancel should close the review UI but leave Neovim running.
+
+**Submit, agent mode** (`$NVIM_CODE_REVIEW_RESULT` set):
+
+- Write the review JSON to the audit trail directory (section 3.1)
+- Write the audit trail file path to `$NVIM_CODE_REVIEW_RESULT`
+- Force-quit Neovim (modified diff buffers are discarded; the spec
+  forbids modifying source files during a review, so no real data is
+  lost)
 - Exit code: 0
 
-**Empty review exit** (user submitted review without comments):
+**Submit, interactive mode** (`$NVIM_CODE_REVIEW_RESULT` unset):
 
-- A review file is still created (empty review, see section 3.2)
-- Write the review file path to the result file
-- Exit code: 0
+- Write the review JSON to the audit trail directory (section 3.1)
+- Export the review as GitHub-flavored Markdown to the system clipboard
+  (same format as `:CodeReviewCopy`)
+- Close diffview, end the review session, leave Neovim running
+- Notify the user with the audit trail path and a confirmation that the
+  clipboard was populated
+- No exit code (Neovim does not exit)
 
-**Cancelled exit** (user quit without submitting, e.g., `:q!`, `:qa`, `ZQ`):
+**Empty review**: An empty review (no comments, no verdict) follows the
+same submit path as a non-empty review. The audit trail file is created
+with an empty `files` array and null `verdict`.
 
-- No review file is created
-- Result file is not written (or is empty)
-- Exit code: 2
+**Cancel, agent mode** (`$NVIM_CODE_REVIEW_RESULT` set):
+
+- No audit trail file is written
+- `$NVIM_CODE_REVIEW_RESULT` is not written (or is left empty)
+- Force-quit Neovim with exit code 2
+
+**Cancel, interactive mode** (`$NVIM_CODE_REVIEW_RESULT` unset):
+
+- No audit trail file is written
+- Close diffview, end the review session, leave Neovim running
+- Notify the user that the review was cancelled
+- No exit code
 
 **Error exit**:
 
@@ -761,9 +791,14 @@ shall write the review JSON to the audit trail directory at
 **REQ-STO-0002** (Ubiquitous): The system shall generate review IDs in the
 format `YYYYMMDDTHHMMSS` (UTC).
 
-**REQ-STO-0003** (Event-driven): When the user submits a review, the system
-shall write the absolute path of the saved review JSON file to the result
-file specified by `$NVIM_CODE_REVIEW_RESULT`.
+**REQ-STO-0003** (Event-driven): When the user submits a review and
+`$NVIM_CODE_REVIEW_RESULT` is set (agent mode), the system shall write the
+absolute path of the saved review JSON file to that path.
+
+**REQ-STO-0008** (Event-driven): When the user submits a review and
+`$NVIM_CODE_REVIEW_RESULT` is unset (interactive mode), the system shall
+export the review as GitHub-flavored Markdown to the system clipboard in
+addition to writing the audit trail file.
 
 **REQ-STO-0004** (Ubiquitous): The review JSON shall conform to the schema
 defined in section 3.2.
@@ -786,9 +821,14 @@ head revision, resolved at review time.
 <range>'`, the system shall parse the range argument and open the
 corresponding diff.
 
-**REQ-CLI-0002** (Event-driven): When a review session ends normally, the
-system shall write the review file path to the result file and exit with
+**REQ-CLI-0002** (Event-driven): When a review session ends normally in
+agent mode (`$NVIM_CODE_REVIEW_RESULT` is set), the system shall write
+the review file path to the result file and force-quit Neovim with exit
 code 0.
+
+**REQ-CLI-0005** (Event-driven): When a review session ends normally in
+interactive mode (`$NVIM_CODE_REVIEW_RESULT` is unset), the system shall
+close diffview and leave Neovim running, without exiting.
 
 **REQ-CLI-0003** (Event-driven): When the user executes `:CodeReviewCopy`,
 the system shall export the current review as GitHub-flavored Markdown to
@@ -913,7 +953,9 @@ system shall delete the session file.
 | REQ-STO-0006  | TST-STO-0006  | Auto     | Submit without commenting, verify review file exists with empty files and null verdict |
 | REQ-STO-0007  | TST-STO-0007  | Auto     | Submit review for each diff type, verify diff_spec fields contain resolved 40-char SHAs |
 | REQ-CLI-0001  | TST-CLI-0001  | Auto     | Invoke with each range format via `-c`, verify correct diff opens |
-| REQ-CLI-0002  | TST-CLI-0002  | Auto     | Complete review, read result file, verify review file path written |
+| REQ-CLI-0002  | TST-CLI-0002  | Auto     | In agent mode, complete review, read result file, verify review file path written and nvim exited |
+| REQ-CLI-0005  | TST-CLI-0005  | Auto     | In interactive mode, complete review, verify nvim still running and clipboard contains markdown |
+| REQ-STO-0008  | TST-STO-0008  | Auto     | In interactive mode, submit a review with comments, verify clipboard contains markdown export |
 | REQ-CLI-0003  | TST-CLI-0003  | Manual   | Execute `:CodeReviewCopy`, verify system clipboard contains GitHub-flavored Markdown with correct structure |
 | REQ-CLI-0004  | TST-CLI-0004  | Auto     | Read review JSON file directly, verify valid JSON parseable without the plugin |
 | REQ-UIX-0001  | TST-UIX-0001  | Manual   | Press summary key, verify summary lists comments grouped by file with line numbers, verdict, and count |
