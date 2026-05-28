@@ -78,6 +78,19 @@ submenu. All keybindings are configurable via `setup({ keymaps = { ... } })`.
 
 All keybindings are configurable via `setup()`.
 
+## Submit behavior
+
+The plugin behaves differently depending on whether
+`$NVIM_CODE_REVIEW_RESULT` is set in the environment:
+
+- **Agent mode** (env var set): writes the review JSON path to the result
+  file and exits Neovim (exit code 0 for submit, 2 for cancel). The agent
+  that launched Neovim reads the result file and proceeds.
+- **Interactive mode** (env var unset): writes the review JSON to the
+  audit trail directory, exports the review as GitHub-flavored Markdown
+  to the system clipboard, closes diffview, and leaves Neovim running.
+  Paste the clipboard into your LLM chat.
+
 ## Agent integration
 
 ```bash

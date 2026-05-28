@@ -61,7 +61,9 @@ function M.exit_submit(review_path)
     M.exit_error("storage_error", err)
     return
   end
-  vim.cmd("quitall")
+  -- Use quitall! to discard any modified diff buffers (the spec forbids
+  -- editing source files during a review, so no real data is lost).
+  vim.cmd("quitall!")
 end
 
 function M.exit_cancel()

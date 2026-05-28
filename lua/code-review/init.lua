@@ -274,7 +274,20 @@ function M._do_submit()
 
   s.submitted = true
   M._cleanup()
-  review.exit_submit(filepath)
+
+  local agent_mode = vim.env.NVIM_CODE_REVIEW_RESULT ~= nil
+    and vim.env.NVIM_CODE_REVIEW_RESULT ~= ""
+
+  if agent_mode then
+    review.exit_submit(filepath)
+  else
+    export.to_clipboard(data)
+    pcall(vim.cmd, "DiffviewClose")
+    vim.notify(
+      "code-review: submitted (saved to " .. filepath .. "; markdown copied to clipboard)",
+      vim.log.levels.INFO
+    )
+  end
 end
 
 function M._populate_hunks(data)
