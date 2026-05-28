@@ -436,14 +436,17 @@ end
 -- `diffview:///path/to/repo/.git/:0:/README.md`. When a third-party LSP
 -- like Marksman attaches because the filetype is markdown, then tries
 -- to handle the buffer's close event, it errors because the path
--- doesn't exist on disk. We detach LSPs from every diff buffer to
--- avoid this. The user is reviewing the code, not editing it, so LSP
--- features add no value here anyway.
+-- doesn't exist on disk. Worse: detaching with `buf_detach_client`
+-- sends textDocument/didClose, which IS the call that crashes
+-- Marksman. So we force-stop the client process (sends shutdown/exit
+-- instead of didClose) on any LSP that attaches to a diff buffer.
+-- Side effect: the user's other markdown buffers lose Marksman until
+-- lspconfig re-attaches on the next FileType event.
 function M._strip_lsps(bufnr)
   if not bufnr or not vim.api.nvim_buf_is_valid(bufnr) then
     return
   end
-  ui.detach_lsps(bufnr)
+  ui.stop_lsps(bufnr)
 end
 
 function M._on_diff_buf_read()
