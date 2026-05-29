@@ -44,6 +44,18 @@ function M.start(range_str)
   M._register_autocmds()
   M._register_commands()
   diff.open(resolved)
+  M._notify_started()
+end
+
+function M._notify_started()
+  local km = config.values.keymaps
+  vim.notify(
+    string.format(
+      "code-review: review session started. Keymaps: %s (line comment) · %s (file comment) · %s (submit) · %s (cancel) · %s (pause)",
+      km.add_comment, km.file_comment, km.summary, km.cancel, km.pause
+    ),
+    vim.log.levels.INFO
+  )
 end
 
 function M.start_from_session(session_id)
@@ -75,6 +87,7 @@ function M.start_from_session(session_id)
   M._register_autocmds()
   M._register_commands()
   diff.open(data.diff_info)
+  M._notify_started()
 end
 
 function M.submit()
