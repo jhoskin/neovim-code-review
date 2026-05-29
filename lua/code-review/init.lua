@@ -47,6 +47,55 @@ function M.start(range_str)
   M._notify_started()
 end
 
+function M.diagnose()
+  local lines = { "=== code-review diagnose ===" }
+  local function add(s) table.insert(lines, s) end
+
+  add("session active: " .. tostring(M._session ~= nil))
+  if M._session then
+    add("  diff_info: " .. vim.inspect(M._session.diff_info))
+    add("  submitted: " .. tostring(M._session.submitted))
+  end
+
+  local cur_buf = vim.api.nvim_get_current_buf()
+  local cur_name = vim.api.nvim_buf_get_name(cur_buf)
+  add("current buffer: " .. cur_buf .. " (" .. cur_name .. ")")
+  add("  modifiable: " .. tostring(vim.bo[cur_buf].modifiable))
+  add("  readonly: " .. tostring(vim.bo[cur_buf].readonly))
+
+  local maps = vim.api.nvim_buf_get_keymap(cur_buf, "n")
+  local r_keys = {}
+  for _, m in ipairs(maps) do
+    if m.lhs and m.lhs:match("R") then
+      table.insert(r_keys, m.lhs .. (m.desc and (" → " .. m.desc) or ""))
+    end
+  end
+  add("R-related keymaps on current buffer:")
+  if #r_keys == 0 then
+    add("  (none)")
+  else
+    for _, k in ipairs(r_keys) do
+      add("  " .. k)
+    end
+  end
+
+  local ok, lib = pcall(require, "diffview.lib")
+  if ok and lib.get_current_view then
+    local view = lib.get_current_view()
+    if view and view.cur_layout then
+      local a = view.cur_layout.a and view.cur_layout.a.file and view.cur_layout.a.file.bufnr or "nil"
+      local b = view.cur_layout.b and view.cur_layout.b.file and view.cur_layout.b.file.bufnr or "nil"
+      add("diffview layout: a=" .. tostring(a) .. " b=" .. tostring(b))
+    else
+      add("diffview view: present but cur_layout is nil")
+    end
+  else
+    add("diffview.lib not loadable")
+  end
+
+  for _, l in ipairs(lines) do print(l) end
+end
+
 function M._notify_started()
   local km = config.values.keymaps
   vim.notify(
