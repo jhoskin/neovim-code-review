@@ -194,9 +194,11 @@ function M.open_comment_float(opts)
     end
   end
 
-  vim.keymap.set({ "n", "i" }, config.values.keymaps.confirm_comment, confirm, {
-    buffer = buf, nowait = true, desc = "Code review: confirm comment",
-  })
+  if config.values.keymaps.confirm_comment then
+    vim.keymap.set({ "n", "i" }, config.values.keymaps.confirm_comment, confirm, {
+      buffer = buf, nowait = true, desc = "Code review: confirm comment",
+    })
+  end
   vim.keymap.set("n", "q", cancel, {
     buffer = buf, nowait = true, desc = "Code review: cancel comment",
   })
