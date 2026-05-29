@@ -416,25 +416,27 @@ function M._register_autocmds()
     end,
   })
 
-  -- Defense-in-depth: re-assert read-only every time the user lands on
-  -- a buffer that the current diffview view is showing. Catches the
-  -- working-tree right-side buffer (real file path, not diffview://)
-  -- which would otherwise be live-editable, and any third-party plugin
-  -- that flips `modifiable` back on after we set it.
-  vim.api.nvim_create_autocmd("BufEnter", {
+  -- Defense-in-depth: every time the user enters a buffer that
+  -- belongs to the diffview view (matched by bufnr against the
+  -- layout OR by buffer-name pattern), re-run the full setup. Catches
+  -- the working-tree right-side buffer (real file path) and any case
+  -- where DiffviewDiffBufRead / DiffviewDiffBufWinEnter fired with
+  -- the layout still half-populated.
+  vim.api.nvim_create_autocmd({ "BufEnter", "BufWinEnter" }, {
     group = group,
     callback = function(ev)
       if not M._session then
         return
       end
+      local name = vim.api.nvim_buf_get_name(ev.buf)
       local view = M._get_view()
-      if not view or not view.cur_layout then
-        return
+      local a_buf, b_buf
+      if view and view.cur_layout then
+        a_buf = M._layout_bufnr(view.cur_layout.a)
+        b_buf = M._layout_bufnr(view.cur_layout.b)
       end
-      local a_buf = M._layout_bufnr(view.cur_layout.a)
-      local b_buf = M._layout_bufnr(view.cur_layout.b)
-      if ev.buf == a_buf or ev.buf == b_buf then
-        M._make_readonly(ev.buf)
+      if ev.buf == a_buf or ev.buf == b_buf or name:match("^diffview://") then
+        M._setup_diff_buf(ev.buf)
       end
     end,
   })
@@ -536,7 +538,24 @@ function M._strip_lsps(bufnr)
   ui.stop_lsps(bufnr)
 end
 
-function M._on_diff_buf_read()
+-- Apply keymaps, extmarks, read-only flag, and LSP stop to a single
+-- diff buffer. Idempotent: safe to call repeatedly from any trigger.
+function M._setup_diff_buf(bufnr)
+  if not bufnr or not vim.api.nvim_buf_is_valid(bufnr) then
+    return
+  end
+  M._set_keymaps(bufnr)
+  M._apply_extmarks(bufnr)
+  M._make_readonly(bufnr)
+  M._strip_lsps(bufnr)
+end
+
+-- Walk all currently-loaded buffers; for each one that belongs to the
+-- active diffview view (synthetic `diffview://` URL OR matches the
+-- working-tree side bufnr from the layout), run the per-buffer setup.
+-- This catches buffers that didn't trigger a DiffviewDiffBufRead event
+-- because the layout wasn't fully populated at firing time.
+function M._setup_all_diff_buffers()
   if not M._session then
     return
   end
@@ -546,43 +565,25 @@ function M._on_diff_buf_read()
   end
   local a_buf = M._layout_bufnr(view.cur_layout.a)
   local b_buf = M._layout_bufnr(view.cur_layout.b)
-  if a_buf then
-    M._set_keymaps(a_buf)
-    M._apply_extmarks(a_buf)
-    M._make_readonly(a_buf)
-    M._strip_lsps(a_buf)
-  end
-  if b_buf then
-    M._set_keymaps(b_buf)
-    M._apply_extmarks(b_buf)
-    M._make_readonly(b_buf)
-    M._strip_lsps(b_buf)
+  for _, bufnr in ipairs(vim.api.nvim_list_bufs()) do
+    if vim.api.nvim_buf_is_valid(bufnr) and vim.api.nvim_buf_is_loaded(bufnr) then
+      local name = vim.api.nvim_buf_get_name(bufnr)
+      if bufnr == a_buf or bufnr == b_buf or name:match("^diffview://") then
+        M._setup_diff_buf(bufnr)
+      end
+    end
   end
   if view.panel and view.panel.bufid then
     M._set_file_panel_keymaps(view.panel.bufid)
   end
 end
 
+function M._on_diff_buf_read()
+  M._setup_all_diff_buffers()
+end
+
 function M._on_diff_buf_win_enter()
-  if not M._session then
-    return
-  end
-  local view = M._get_view()
-  if not view or not view.cur_layout then
-    return
-  end
-  local a_buf = M._layout_bufnr(view.cur_layout.a)
-  local b_buf = M._layout_bufnr(view.cur_layout.b)
-  if a_buf then
-    M._apply_extmarks(a_buf)
-    M._make_readonly(a_buf)
-    M._strip_lsps(a_buf)
-  end
-  if b_buf then
-    M._apply_extmarks(b_buf)
-    M._make_readonly(b_buf)
-    M._strip_lsps(b_buf)
-  end
+  M._setup_all_diff_buffers()
 end
 
 function M._set_file_panel_keymaps(bufnr)
