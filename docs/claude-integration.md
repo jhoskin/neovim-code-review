@@ -170,30 +170,55 @@ argument-hint: "[git-range]"
 allowed-tools: Bash, Read, Edit
 ---
 
-Hand control to the user for an interactive code review in Neovim, then read the JSON they submit and apply their feedback.
+Hand control to the user for an interactive code review in Neovim. Neovim is launched inside a detached tmux session (it needs a real TTY, which Claude Code's Bash tool does not provide) and auto-attached in a new iTerm2 tab. After the user submits or cancels, parse the JSON and apply their feedback.
 
-Do not read other files first. Run the following Bash immediately (one tool call, foreground). It blocks until the user submits or cancels.
+Do not read other files first. Run the script below as one Bash call. Pass `timeout: 600000` to the Bash tool — the script blocks until the user finishes the review and reviews can take many minutes.
 
 ```bash
 set -euo pipefail
 case "${ARGUMENTS:-}" in *[\|\"\\]*|*$'\n'*) echo "code-review: unsafe ARGUMENTS" >&2; exit 1 ;; esac
 
+session="code-review-$$"
 result_file=$(mktemp "${TMPDIR:-/tmp}/nvim-code-review.XXXXXX")
-stderr_file=$(mktemp "${TMPDIR:-/tmp}/nvim-code-review-err.XXXXXX")
-trap 'rm -f "$result_file" "$stderr_file"' EXIT INT TERM HUP
+sentinel="${result_file}.done"
+trap 'tmux kill-session -t "$session" 2>/dev/null; rm -f "$result_file" "$sentinel"' EXIT INT TERM HUP
 
-NVIM_CODE_REVIEW_RESULT="$result_file" \
-  nvim -c "CodeReview ${ARGUMENTS:-}" 2>"$stderr_file"
-rc=$?
+# Run nvim inside a detached tmux session so it gets a real PTY.
+tmux new-session -d -s "$session" -x 220 -y 60 \
+  "NVIM_CODE_REVIEW_RESULT='$result_file' nvim -c 'CodeReview ${ARGUMENTS:-}'; echo \$? > '$sentinel'"
 
+# Auto-open a new iTerm2 tab and attach. Fall back to printing instructions.
+if command -v it2 >/dev/null 2>&1; then
+  it2 tab new >/dev/null
+  it2 session set-name "code review" >/dev/null 2>&1 || true
+  it2 run "tmux attach -t $session" >/dev/null
+  echo "Review opened in a new iTerm2 tab (tmux session: $session)." >&2
+  echo "Submit with <leader>Rs, cancel with <leader>Rq." >&2
+else
+  echo "Attach to the review with:  tmux attach -t $session" >&2
+  echo "Then submit with <leader>Rs or cancel with <leader>Rq." >&2
+fi
+
+# Wait for nvim to exit (sentinel file written). 10 min max.
+start=$(date +%s)
+while [ ! -f "$sentinel" ]; do
+  sleep 0.5
+  now=$(date +%s)
+  if [ $((now - start)) -gt 600 ]; then
+    echo "code-review: timed out after 10 minutes" >&2
+    exit 1
+  fi
+done
+
+rc=$(cat "$sentinel")
 case "$rc" in
   0)
     review_path=$(cat "$result_file")
-    [ -n "$review_path" ] || { echo "code-review: empty result"; cat "$stderr_file" >&2; exit 1; }
+    [ -n "$review_path" ] || { echo "code-review: empty result" >&2; exit 1; }
     jq . "$review_path"
     ;;
   2) echo "review cancelled" >&2; exit 2 ;;
-  *) echo "neovim error (exit $rc)"; cat "$stderr_file" >&2; exit "$rc" ;;
+  *) echo "neovim error (exit $rc)" >&2; exit "$rc" ;;
 esac
 ```
 
@@ -206,17 +231,30 @@ After the Bash returns, act based on the exit code:
 `$ARGUMENTS` is an optional git revision range (`HEAD~3..HEAD`, `main...HEAD`, empty for working tree).
 ````
 
-### Why this body is short
+### Why the body is short
 
 Claude Code loads the entire slash-command body as the prompt the agent
-responds to. Long bodies — extensive prerequisites, explanations,
-checklists — cause the agent to "think" longer before invoking the
-first tool, so `/code-review` can feel like it hangs for tens of
-seconds before Neovim appears. The body above strips out everything
-the agent does not need at runtime (it lives in the rest of this doc
-for human readers); the explicit "Do not read other files first" is
-there to keep the agent from chasing the spec or the README before
-running the script.
+responds to. Long bodies (extensive prerequisites, explanations,
+checklists) make the agent "think" longer before invoking the first
+tool. The body above strips out everything the agent does not need at
+runtime; the explicit "Do not read other files first" keeps the agent
+from chasing the spec or the README before launching Neovim.
+
+### Why tmux and not just `nvim`
+
+Claude Code's Bash tool does not allocate a controlling TTY for the
+foreground command. Run `nvim` directly and it hangs invisibly: there
+is no TTY for it to render into, and the agent's Bash call just sits
+there until the timeout fires. Running `nvim` inside a detached `tmux
+new-session -d` is the workaround: tmux creates its own pseudo-TTY so
+Neovim renders happily, and the user attaches to that tmux session
+from a normal terminal pane.
+
+The `it2 tab new` + `it2 run "tmux attach ..."` block opens that
+attachment automatically in iTerm2. Without iTerm2 (or without the
+`it2` CLI installed) the script falls back to printing the
+`tmux attach -t <session>` command for the user to run by hand in any
+terminal.
 
 ### What the body does, in plain English
 
@@ -224,13 +262,15 @@ running the script.
 body. The first `case` rejects anything containing `|`, `"`, `\` or a
 newline — none of which appear in legitimate git revision specs
 (`HEAD~3..HEAD`, `main...HEAD`, `@^`) but each of which is a Vim or
-shell metacharacter that could break out of `-c "CodeReview $ARGUMENTS"`.
-The two `mktemp` files hold the result path the plugin writes and the
-stderr from Neovim; the `trap` line removes them on every exit path so
-nothing leaks. `NVIM_CODE_REVIEW_RESULT` is the env-var handshake — its
-presence is what tells the plugin to run in agent mode. The plugin
-exits 0 (submitted), 2 (cancelled), or 1 (error). `jq .` pretty-prints
-the JSON so the agent reads it as text in its next turn.
+shell metacharacter that could break out of `-c "CodeReview
+$ARGUMENTS"`. `result_file` holds the path the plugin writes to,
+`sentinel` is the file the wrapping shell uses to publish Neovim's
+exit code once it terminates inside tmux. `NVIM_CODE_REVIEW_RESULT` is
+the env-var handshake — its presence tells the plugin to run in agent
+mode. The plugin exits 0 (submitted), 2 (cancelled), or 1 (error). The
+polling loop waits for the sentinel file to appear (with a 10-minute
+ceiling) and `jq .` pretty-prints the JSON so the agent reads it in
+its next turn.
 
 ### TTY note
 
