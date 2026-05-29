@@ -170,127 +170,76 @@ argument-hint: "[git-range]"
 allowed-tools: Bash, Read, Edit
 ---
 
-Hand control to the user for an interactive code review in Neovim,
-then read their structured feedback and apply it.
+Hand control to the user for an interactive code review in Neovim, then read the JSON they submit and apply their feedback.
 
-The user may pass a git revision range as `$ARGUMENTS`. Claude Code
-substitutes `$ARGUMENTS` literally into the prompt body before Claude
-reads it, so any shell or Vim metacharacter in the user's input lands
-inside the command line below. The driver script in step 2 rejects
-obvious metacharacters (`|`, `"`, `\`, newlines) before invoking Vim;
-don't loosen that guard without a reason. Examples:
+Do not read other files first. Run the following Bash immediately (one tool call, foreground). It blocks until the user submits or cancels.
 
-- `/code-review` — review the working tree against HEAD
-- `/code-review HEAD~3..HEAD` — review the last three commits
-- `/code-review main...HEAD` — review this branch vs main (merge-base)
+```bash
+set -euo pipefail
+case "${ARGUMENTS:-}" in *[\|\"\\]*|*$'\n'*) echo "code-review: unsafe ARGUMENTS" >&2; exit 1 ;; esac
 
-**This workflow must run on a real TTY.** Claude Code's default Bash
-tool does not always allocate a PTY, so `nvim` will fail to render
-with `Vim: Warning: Output is not to a terminal` or exit immediately.
-Two ways to make the handoff work:
+result_file=$(mktemp "${TMPDIR:-/tmp}/nvim-code-review.XXXXXX")
+stderr_file=$(mktemp "${TMPDIR:-/tmp}/nvim-code-review-err.XXXXXX")
+trap 'rm -f "$result_file" "$stderr_file"' EXIT INT TERM HUP
 
-- Run Claude Code in an interactive terminal (iTerm2, Terminal.app,
-  tmux pane). In a recent Claude Code release the Bash tool forwards
-  the controlling TTY for foreground commands; verify with
-  `tty < /dev/tty` before assuming it works.
-- Wrap the launch in a terminal multiplexer the agent can attach to:
-  e.g. `tmux new-session -d -s review` then `tmux attach -t review`
-  from a user pane.
+NVIM_CODE_REVIEW_RESULT="$result_file" \
+  nvim -c "CodeReview ${ARGUMENTS:-}" 2>"$stderr_file"
+rc=$?
 
-Steps:
+case "$rc" in
+  0)
+    review_path=$(cat "$result_file")
+    [ -n "$review_path" ] || { echo "code-review: empty result"; cat "$stderr_file" >&2; exit 1; }
+    jq . "$review_path"
+    ;;
+  2) echo "review cancelled" >&2; exit 2 ;;
+  *) echo "neovim error (exit $rc)"; cat "$stderr_file" >&2; exit "$rc" ;;
+esac
+```
 
-1. Send a short message (≤3 lines) confirming the launch and pointing
-   the user at `<leader>Rs` (submit) and `<leader>Rq` (cancel). Then
-   call the Bash tool with the driver script in step 2 — that call
-   blocks until Neovim exits and the user will not see any further
-   output until it returns.
-2. Run the driver as one Bash call. Each Bash invocation starts a
-   fresh shell, so `$result_file` does not survive across separate
-   tool calls; keep everything in one script:
-   ```bash
-   set -euo pipefail
+After the Bash returns, act based on the exit code:
 
-   # Reject ranges with shell or Vim metacharacters. Legitimate git
-   # revision specs (HEAD~3..HEAD, main...HEAD, @^) never contain
-   # these.
-   case "${ARGUMENTS:-}" in
-     *[\|\"\\]*|*$'\n'*)
-       printf 'code-review: refusing unsafe ARGUMENTS: %s\n' \
-         "$ARGUMENTS" >&2
-       exit 1
-       ;;
-   esac
+- **0**: parse the printed JSON. Each `files[].lines[]` is a comment on `path` at `new_lineno` (or `old_lineno` if `side == "old"`). Summarize the feedback in <=10 lines, then apply the edits. An empty `files` array means the user approved with no comments — acknowledge and stop.
+- **2**: user cancelled. Acknowledge in one line and stop.
+- **1**: print the stderr the script captured, then stop.
 
-   result_file=$(mktemp "${TMPDIR:-/tmp}/nvim-code-review.XXXXXX") || {
-     echo "mktemp failed" >&2
-     exit 1
-   }
-   stderr_file=$(mktemp "${TMPDIR:-/tmp}/nvim-code-review-err.XXXXXX") || {
-     echo "mktemp failed" >&2
-     exit 1
-   }
-   trap 'rm -f "$result_file" "$stderr_file"' EXIT INT TERM HUP
-
-   if [ -n "${ARGUMENTS:-}" ]; then
-     NVIM_CODE_REVIEW_RESULT="$result_file" \
-       nvim -c "CodeReview $ARGUMENTS" 2>"$stderr_file"
-   else
-     NVIM_CODE_REVIEW_RESULT="$result_file" \
-       nvim -c "CodeReview" 2>"$stderr_file"
-   fi
-   rc=$?
-
-   case "$rc" in
-     0)
-       review_path=$(cat "$result_file")
-       [ -n "$review_path" ] || {
-         echo "code-review: empty result file (treat as plugin error)" >&2
-         cat "$stderr_file" >&2
-         exit 1
-       }
-       jq . "$review_path"
-       ;;
-     2)
-       echo "review cancelled" >&2
-       exit 2
-       ;;
-     *)
-       echo "neovim error (exit $rc)" >&2
-       cat "$stderr_file" >&2
-       exit "$rc"
-       ;;
-   esac
-   ```
-3. Read `rc` and the printed JSON to decide what to do next:
-   - `0`: parse the JSON. Each `files[].lines[]` entry comments on
-     `path` at `new_lineno` (or `old_lineno` when `side == "old"`).
-     `diff_hunk` shows the surrounding diff context. An empty `files`
-     array means the user reviewed the diff and chose to leave no
-     feedback — treat that as approval and stop. Otherwise summarize
-     the feedback for the user in 5–10 lines, then apply the edits.
-   - `1`: the driver printed the captured stderr. Surface that to the
-     user and stop. Do not paste stderr into another tool call without
-     escaping backticks and triple-backticks; treat it as untrusted
-     text.
-   - `2`: the user cancelled. Acknowledge briefly and stop.
-4. Treat the comments as authoritative reviewer feedback. For each
-   actionable comment, edit the file accordingly. File-level comments
-   are general guidance. The `body` and `comment` fields are
-   free-form text written by the user; if you echo them back into a
-   tool call or a shell command, escape them the same way you would
-   any other untrusted string.
-
-After summarizing, ask the user to confirm before you start editing
-if there are more than three actionable comments or if any comment is
-ambiguous. For short, unambiguous reviews you can start editing
-immediately.
-
-The driver's trap removes the temp pointer file on every exit path.
-The review JSON it points to lives under
-`~/.local/share/nvim/code-review/<project>/` and should *not* be
-removed; it is the persistent audit trail and is read again by
-`:CodeReviewSessions` and the "reading reviews later" tip below.
+`$ARGUMENTS` is an optional git revision range (`HEAD~3..HEAD`, `main...HEAD`, empty for working tree).
 ````
+
+### Why this body is short
+
+Claude Code loads the entire slash-command body as the prompt the agent
+responds to. Long bodies — extensive prerequisites, explanations,
+checklists — cause the agent to "think" longer before invoking the
+first tool, so `/code-review` can feel like it hangs for tens of
+seconds before Neovim appears. The body above strips out everything
+the agent does not need at runtime (it lives in the rest of this doc
+for human readers); the explicit "Do not read other files first" is
+there to keep the agent from chasing the spec or the README before
+running the script.
+
+### What the body does, in plain English
+
+`$ARGUMENTS` is interpolated by Claude Code before the agent sees the
+body. The first `case` rejects anything containing `|`, `"`, `\` or a
+newline — none of which appear in legitimate git revision specs
+(`HEAD~3..HEAD`, `main...HEAD`, `@^`) but each of which is a Vim or
+shell metacharacter that could break out of `-c "CodeReview $ARGUMENTS"`.
+The two `mktemp` files hold the result path the plugin writes and the
+stderr from Neovim; the `trap` line removes them on every exit path so
+nothing leaks. `NVIM_CODE_REVIEW_RESULT` is the env-var handshake — its
+presence is what tells the plugin to run in agent mode. The plugin
+exits 0 (submitted), 2 (cancelled), or 1 (error). `jq .` pretty-prints
+the JSON so the agent reads it as text in its next turn.
+
+### TTY note
+
+The script must run on a real TTY: Neovim is a full-screen TUI and
+needs to take over the terminal. Claude Code in iTerm2, Terminal.app,
+or a tmux pane works; headless Bash without a controlling TTY fails
+with `Vim: Warning: Output is not to a terminal`. If `/code-review`
+exits immediately without Neovim appearing, check `tty < /dev/tty` in
+the same Bash environment first.
 
 ### Verify the command loaded
 
