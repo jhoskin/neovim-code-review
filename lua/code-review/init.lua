@@ -505,6 +505,9 @@ function M._set_file_panel_keymaps(bufnr)
   end
   local km = config.values.keymaps
   local function map(lhs, fn, desc)
+    if lhs == false then
+      return
+    end
     vim.keymap.set("n", lhs, fn, { buffer = bufnr, nowait = true, desc = desc })
   end
 
@@ -517,6 +520,9 @@ end
 function M._set_keymaps(bufnr)
   local km = config.values.keymaps
   local function map(lhs, fn, desc)
+    if lhs == false then
+      return
+    end
     vim.keymap.set("n", lhs, fn, { buffer = bufnr, nowait = true, desc = desc })
   end
 

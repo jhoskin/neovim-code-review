@@ -928,6 +928,12 @@ prefix (Review) to avoid collision with common LazyVim/which-key
 `<C-s>` (confirm comment in float). All keybindings are configurable via
 `setup({ keymaps = { ... } })` (see REQ-UIX-0005).
 
+**REQ-UIX-0010** (Optional-feature): Where a value in the `keymaps`
+table passed to `setup()` is `false`, the system shall skip registering
+that keybinding entirely. This lets users disable a default and bind
+their own action with `vim.keymap.set` without colliding with the
+plugin's default.
+
 **REQ-UIX-0009** (Event-driven): When the user invokes submit (via
 `<leader>Rs` or `:CodeReviewSubmit`), the summary float (SCR-SUMMARY-01)
 shall display the exact Markdown that would be exported on confirmation
@@ -1095,6 +1101,7 @@ not on disk to begin with), unlike for diff buffers.
 | REQ-CLI-0008  | TST-CLI-0008  | Auto     | Before session, verify `:CodeReviewSubmit` does not exist; start session, verify it exists; end session, verify it is removed |
 | REQ-UIX-0008  | TST-UIX-0008  | Auto     | Verify `vim.api.nvim_buf_get_keymap()` on a diff buffer contains the documented default keys (`<leader>Rc`, `<leader>Rs`, etc.) |
 | REQ-UIX-0009  | TST-UIX-0009  | Auto     | Trigger `:CodeReviewSubmit`, capture the summary float content, verify it includes the markdown preamble from section 4.7 |
+| REQ-UIX-0010  | TST-UIX-0010  | Auto     | Call `setup({ keymaps = { add_comment = false, delete_comment = false } })`, start a review, verify those keys are not bound on diff buffers while other defaults are |
 | REQ-LSP-0001  | TST-LSP-0001  | Auto     | Start a review in a repo whose diff contains a `.md` file, verify no LSPs are attached to the diff buffers (covered by `test_13_diff_buffers_no_lsp.sh`) |
 | REQ-LSP-0002  | TST-LSP-0002  | Auto     | Open the comment float and summary float, verify both have filetype `codereview` (covered by `test_12_float_filetype.sh`) |
 | REQ-LSP-0003  | TST-LSP-0003  | Auto     | Open the comment float, verify no LSPs are attached after the filetype is set |
