@@ -499,15 +499,22 @@ function M._cleanup()
   M._session = nil
 end
 
+-- Resolve the currently-displayed buffer for a layout side. Prefer the
+-- live `nvim_win_get_buf(window_id)` lookup over `layout_side.file.bufnr`
+-- because diffview caches the `file.bufnr` of the file it was opened
+-- with; navigating to a different file swaps the buffer in the same
+-- window but does NOT update the cached `file.bufnr`. The window id
+-- is stable across navigation, so reading the buffer through it always
+-- yields the buffer currently on screen.
 function M._layout_bufnr(layout_side)
   if not layout_side then
     return nil
   end
-  if layout_side.file and layout_side.file.bufnr then
-    return layout_side.file.bufnr
-  end
   if layout_side.id and vim.api.nvim_win_is_valid(layout_side.id) then
     return vim.api.nvim_win_get_buf(layout_side.id)
+  end
+  if layout_side.file and layout_side.file.bufnr then
+    return layout_side.file.bufnr
   end
   return nil
 end
