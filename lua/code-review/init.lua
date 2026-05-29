@@ -354,6 +354,29 @@ function M._register_autocmds()
     end,
   })
 
+  -- Defense-in-depth: re-assert read-only every time the user lands on
+  -- a buffer that the current diffview view is showing. Catches the
+  -- working-tree right-side buffer (real file path, not diffview://)
+  -- which would otherwise be live-editable, and any third-party plugin
+  -- that flips `modifiable` back on after we set it.
+  vim.api.nvim_create_autocmd("BufEnter", {
+    group = group,
+    callback = function(ev)
+      if not M._session then
+        return
+      end
+      local view = M._get_view()
+      if not view or not view.cur_layout then
+        return
+      end
+      local a_buf = M._layout_bufnr(view.cur_layout.a)
+      local b_buf = M._layout_bufnr(view.cur_layout.b)
+      if ev.buf == a_buf or ev.buf == b_buf then
+        M._make_readonly(ev.buf)
+      end
+    end,
+  })
+
   vim.api.nvim_create_autocmd("User", {
     group = group,
     pattern = "DiffviewViewClosed",
@@ -430,6 +453,7 @@ function M._make_readonly(bufnr)
     return
   end
   vim.bo[bufnr].modifiable = false
+  vim.bo[bufnr].readonly = true
 end
 
 -- Diffview's diff buffers represent files via synthetic names like
