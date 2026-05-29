@@ -450,6 +450,44 @@ If you also want to clear stale paused sessions, raise `-maxdepth` to
 
 ## Troubleshooting
 
+#### lazy.nvim fails to clone from GitHub: `fatal: could not read Username for 'https://github.com'`
+
+The plugin's repo is reachable over HTTPS only with a credential
+helper, and lazy.nvim runs `git clone` with terminal prompts disabled.
+If you maintain a private mirror (or any private fork), tell lazy.nvim
+to clone over SSH so it uses your SSH key:
+
+```lua
+{
+  "owner/repo",
+  url = "git@github.com:owner/repo.git",
+  -- ... rest of the spec
+}
+```
+
+Drop the `url =` line again once the repo is public, or if you set up
+an HTTPS credential helper that does not need a TTY.
+
+#### lazy.nvim leaves a `<repo>.cloning` directory and refuses to install
+
+If you killed Neovim mid-clone, or if `:CodeReview` fired before
+lazy.nvim finished installing the plugin for the first time, lazy
+leaves a half-finished clone at
+`~/.local/share/nvim/lazy/<repo>.cloning`. Subsequent installs see
+the marker and refuse to overwrite it.
+
+Move the directory aside and re-run install. Using this repo's
+[TRASH convention](https://github.com/jhoskin/neovim-code-review/blob/main/.gitignore):
+
+```bash
+mkdir -p ~/.local/share/nvim/lazy/TRASH
+mv ~/.local/share/nvim/lazy/neovim-code-review.cloning \
+   ~/.local/share/nvim/lazy/TRASH/
+```
+
+Then `nvim --headless +'Lazy! install' +qa` or `:Lazy install` inside
+Neovim.
+
 #### `:CodeReview` is not a recognized command (`E492: Not an editor command: CodeReview`)
 
 Your plugin manager has not loaded code-review yet.

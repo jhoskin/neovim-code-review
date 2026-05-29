@@ -32,9 +32,9 @@ Setup, in order:
    confirm `:CodeReview` works in your own Neovim.
 2. Install [Claude Code](https://docs.anthropic.com/en/docs/claude-code)
    and confirm `claude` runs in your terminal.
-3. Drop the `/code-review` slash command file into
+3. Drop the `/interactive-review` slash command file into
    `~/.claude/commands/` (full body below).
-4. From inside a git repo, launch Claude Code and type `/code-review`
+4. From inside a git repo, launch Claude Code and type `/interactive-review`
    to try it.
 
 ## How it works
@@ -142,89 +142,61 @@ not replace it with `IFS= read -r path < file`; `read` returns
 non-zero at EOF without a newline even though the variable is set,
 which trips up scripts that gate on `read`'s exit status.
 
-## Setting up the `/code-review` slash command
+## Setting up the `/interactive-review` slash command
 
 A *slash command* in Claude Code is a saved prompt template you invoke
-by typing `/<name>` at the start of a message — for example
-`/code-review`. Claude Code discovers slash commands by scanning
-`~/.claude/commands/` for markdown files; the filename (minus `.md`)
-becomes the command name. Each file has YAML frontmatter
-(`description`, `argument-hint`, `allowed-tools`) followed by the
-prompt body that Claude will read and execute. The body can reference
-`$ARGUMENTS`, which Claude Code substitutes with whatever you typed
-after the command name (e.g. `/code-review HEAD~3..HEAD` makes
-`$ARGUMENTS` equal `HEAD~3..HEAD`).
+by typing `/<name>` at the start of a message. Claude Code discovers
+slash commands by scanning `~/.claude/commands/` for markdown files;
+the filename (minus `.md`) becomes the command name.
 
-The body below is the prompt Claude sees, written in the second person
-addressed *to Claude*. You (the human) are configuring it once and can
-stop reading after the frontmatter. Copy the block below (everything
-between the four-backtick fences, *not* the fences themselves) into
-`~/.claude/commands/code-review.md`. The outer fence uses four
-backticks so the inner triple-backtick code blocks render correctly
-here.
+The command name `interactive-review` deliberately avoids
+`/code-review`, which is taken by a built-in Claude Code skill that
+does AI-only review of a diff. The two are complementary; only the
+plugin's command hands control to a human in Neovim.
+
+### Install the launch script
+
+The slash command's body is a one-liner that execs a real shell script
+on disk. The script is bundled with the plugin at
+`scripts/interactive-review-launch` and copied into your `~/.claude/`
+namespace as a one-time install step:
+
+```bash
+mkdir -p ~/.claude/scripts
+cp ~/.local/share/nvim/lazy/neovim-code-review/scripts/interactive-review-launch \
+   ~/.claude/scripts/interactive-review-launch
+chmod +x ~/.claude/scripts/interactive-review-launch
+```
+
+If you installed the plugin manually (not via lazy.nvim), substitute
+the right source path — typically
+`~/.local/share/nvim/site/pack/plugins/start/neovim-code-review/scripts/interactive-review-launch`.
+
+Re-run the copy after `:Lazy update` to pick up script changes.
+
+### Install the slash command
+
+Copy the block below (the contents between the four-backtick fences,
+not the fences themselves) into `~/.claude/commands/interactive-review.md`:
 
 ````markdown
 ---
-description: Open a code review in Neovim and act on the feedback
+description: Open an interactive code review in Neovim and act on the feedback
 argument-hint: "[git-range]"
 allowed-tools: Bash, Read, Edit
 ---
 
-Hand control to the user for an interactive code review in Neovim. Neovim is launched inside a detached tmux session (it needs a real TTY, which Claude Code's Bash tool does not provide) and auto-attached in a new iTerm2 tab. After the user submits or cancels, parse the JSON and apply their feedback.
+Hand control to the user for an interactive code review, then read the JSON they submit and apply their feedback.
 
-Do not read other files first. Run the script below as one Bash call. Pass `timeout: 600000` to the Bash tool — the script blocks until the user finishes the review and reviews can take many minutes.
+Do not read other files first. Run the script below with `timeout: 600000`. The script polls for up to five hours, but Claude Code's Bash tool caps at ten minutes; if the user needs longer, they can pause the review (`<leader>Rp`), let this call time out, and resume with `:CodeReviewSessions` later.
 
 ```bash
-set -euo pipefail
-case "${ARGUMENTS:-}" in *[\|\"\\]*|*$'\n'*) echo "code-review: unsafe ARGUMENTS" >&2; exit 1 ;; esac
-
-session="code-review-$$"
-result_file=$(mktemp "${TMPDIR:-/tmp}/nvim-code-review.XXXXXX")
-sentinel="${result_file}.done"
-trap 'tmux kill-session -t "$session" 2>/dev/null; rm -f "$result_file" "$sentinel"' EXIT INT TERM HUP
-
-# Run nvim inside a detached tmux session so it gets a real PTY.
-tmux new-session -d -s "$session" -x 220 -y 60 \
-  "NVIM_CODE_REVIEW_RESULT='$result_file' nvim -c 'CodeReview ${ARGUMENTS:-}'; echo \$? > '$sentinel'"
-
-# Auto-open a new iTerm2 tab and attach. Fall back to printing instructions.
-if command -v it2 >/dev/null 2>&1; then
-  it2 tab new >/dev/null
-  it2 session set-name "code review" >/dev/null 2>&1 || true
-  it2 run "tmux attach -t $session" >/dev/null
-  echo "Review opened in a new iTerm2 tab (tmux session: $session)." >&2
-  echo "Submit with <leader>Rs, cancel with <leader>Rq." >&2
-else
-  echo "Attach to the review with:  tmux attach -t $session" >&2
-  echo "Then submit with <leader>Rs or cancel with <leader>Rq." >&2
-fi
-
-# Wait for nvim to exit (sentinel file written). 10 min max.
-start=$(date +%s)
-while [ ! -f "$sentinel" ]; do
-  sleep 0.5
-  now=$(date +%s)
-  if [ $((now - start)) -gt 600 ]; then
-    echo "code-review: timed out after 10 minutes" >&2
-    exit 1
-  fi
-done
-
-rc=$(cat "$sentinel")
-case "$rc" in
-  0)
-    review_path=$(cat "$result_file")
-    [ -n "$review_path" ] || { echo "code-review: empty result" >&2; exit 1; }
-    jq . "$review_path"
-    ;;
-  2) echo "review cancelled" >&2; exit 2 ;;
-  *) echo "neovim error (exit $rc)" >&2; exit "$rc" ;;
-esac
+~/.claude/scripts/interactive-review-launch "${ARGUMENTS:-}"
 ```
 
 After the Bash returns, act based on the exit code:
 
-- **0**: parse the printed JSON. Each `files[].lines[]` is a comment on `path` at `new_lineno` (or `old_lineno` if `side == "old"`). Summarize the feedback in <=10 lines, then apply the edits. An empty `files` array means the user approved with no comments — acknowledge and stop.
+- **0**: parse the printed JSON. Each `files[].lines[]` entry is a comment on `path` at `new_lineno` (or `old_lineno` if `side == "old"`). Summarize the feedback in <=10 lines, then apply the edits. An empty `files` array means the user approved with no comments — acknowledge and stop.
 - **2**: user cancelled. Acknowledge in one line and stop.
 - **1**: print the stderr the script captured, then stop.
 
@@ -233,60 +205,44 @@ After the Bash returns, act based on the exit code:
 
 ### Why the body is short
 
-Claude Code loads the entire slash-command body as the prompt the agent
-responds to. Long bodies (extensive prerequisites, explanations,
-checklists) make the agent "think" longer before invoking the first
-tool. The body above strips out everything the agent does not need at
-runtime; the explicit "Do not read other files first" keeps the agent
-from chasing the spec or the README before launching Neovim.
+Claude Code loads the entire slash-command body as the prompt the
+agent responds to. Long bodies (extensive prerequisites, inline
+scripts, explanations) make the agent "think" longer before invoking
+the first tool. Keeping the body to a description, one script call,
+and three exit-code rules means the agent acts almost immediately;
+the launch script is on disk and tested, not regenerated each turn.
 
-### Why tmux and not just `nvim`
+### Why the script uses tmux
 
 Claude Code's Bash tool does not allocate a controlling TTY for the
 foreground command. Run `nvim` directly and it hangs invisibly: there
 is no TTY for it to render into, and the agent's Bash call just sits
-there until the timeout fires. Running `nvim` inside a detached `tmux
-new-session -d` is the workaround: tmux creates its own pseudo-TTY so
-Neovim renders happily, and the user attaches to that tmux session
-from a normal terminal pane.
+there until the timeout fires. The bundled script wraps `nvim` in a
+detached `tmux new-session -d`, which gives Neovim its own pseudo-TTY,
+then attaches that session in a new iTerm2 tab via the `it2` CLI.
+Without iTerm2 (or without `it2` installed) the script falls back to
+printing the `tmux attach -t <session>` command for you to run by hand
+in any terminal pane.
 
-The `it2 tab new` + `it2 run "tmux attach ..."` block opens that
-attachment automatically in iTerm2. Without iTerm2 (or without the
-`it2` CLI installed) the script falls back to printing the
-`tmux attach -t <session>` command for the user to run by hand in any
-terminal.
-
-### What the body does, in plain English
+### What the script does
 
 `$ARGUMENTS` is interpolated by Claude Code before the agent sees the
-body. The first `case` rejects anything containing `|`, `"`, `\` or a
-newline — none of which appear in legitimate git revision specs
-(`HEAD~3..HEAD`, `main...HEAD`, `@^`) but each of which is a Vim or
-shell metacharacter that could break out of `-c "CodeReview
-$ARGUMENTS"`. `result_file` holds the path the plugin writes to,
-`sentinel` is the file the wrapping shell uses to publish Neovim's
-exit code once it terminates inside tmux. `NVIM_CODE_REVIEW_RESULT` is
-the env-var handshake — its presence tells the plugin to run in agent
-mode. The plugin exits 0 (submitted), 2 (cancelled), or 1 (error). The
-polling loop waits for the sentinel file to appear (with a 10-minute
-ceiling) and `jq .` pretty-prints the JSON so the agent reads it in
-its next turn.
-
-### TTY note
-
-The script must run on a real TTY: Neovim is a full-screen TUI and
-needs to take over the terminal. Claude Code in iTerm2, Terminal.app,
-or a tmux pane works; headless Bash without a controlling TTY fails
-with `Vim: Warning: Output is not to a terminal`. If `/code-review`
-exits immediately without Neovim appearing, check `tty < /dev/tty` in
-the same Bash environment first.
+slash-command body. The script's first `case` rejects any argument
+containing `|`, `"`, `\`, or newline — none appear in legitimate git
+revision specs (`HEAD~3..HEAD`, `main...HEAD`, `@^`) but each is a
+Vim or shell metacharacter that could break out of
+`-c "CodeReview <range>"`. The plugin's
+`NVIM_CODE_REVIEW_RESULT` env-var handshake puts the plugin in agent
+mode; the script polls for the sentinel file that records Neovim's
+exit code, then prints the review JSON via `jq` (exit 0), `review
+cancelled` (exit 2), or an error diagnostic (exit 1).
 
 ### Verify the command loaded
 
-In a new Claude Code session, type `/` and confirm `code-review`
+In a new Claude Code session, type `/` and confirm `interactive-review`
 appears in the completions. If it doesn't:
 
-- Confirm the file exists at `~/.claude/commands/code-review.md`.
+- Confirm the file exists at `~/.claude/commands/interactive-review.md`.
 - Confirm the frontmatter parses: the file must start with `---`,
   contain `description: ...`, and end the frontmatter with `---`.
 - Restart Claude Code if it was already running.
@@ -298,7 +254,7 @@ Claude; unprefixed paragraphs are Claude's replies; bracketed lines
 describe what happens in Neovim.
 
 ```text
-> /code-review HEAD~2..HEAD
+> /interactive-review HEAD~2..HEAD
 
 Launching code review for HEAD~2..HEAD. Add comments in Neovim, then
 <leader>Rs to submit (or <leader>Rq to cancel).
@@ -369,6 +325,42 @@ fi
 ls -1t -- ~/.local/share/nvim/code-review/"$hash"/*.json 2>/dev/null \
   | head -5
 ```
+
+## Troubleshooting
+
+`Plugin neovim-code-review is not installed`
+: lazy.nvim has the plugin in its spec but has not cloned it yet (or
+  a previous clone failed). Run `:Lazy install` once in your own
+  Neovim before invoking `/interactive-review`. If a
+  `~/.local/share/nvim/lazy/neovim-code-review.cloning` directory
+  exists, that is a half-finished clone — see
+  [installation.md's Troubleshooting section](installation.md#troubleshooting)
+  for the cleanup.
+
+The Bash call runs for several seconds, then exits with no Neovim window
+: The script is waiting for the sentinel file but `nvim` exited
+  immediately. The most common cause is that the plugin is not loaded
+  yet and `:CodeReview` fired before lazy.nvim finished installing it.
+  Run `:Lazy install` first, then re-invoke `/interactive-review`.
+
+No new iTerm2 tab opens; the script just prints a `tmux attach` line
+: The `it2` CLI is not on the PATH inside Claude Code's Bash
+  environment. Install it (see
+  [github.com/mkusaka/it2](https://github.com/mkusaka/it2)) or run the
+  printed `tmux attach -t <session>` command yourself in any terminal
+  pane.
+
+`neovim error (exit ...)` and Neovim never appears
+: nvim crashed at startup. Run `nvim --headless +qa` in the same shell
+  to surface the underlying error (often a missing dependency in your
+  config or a plugin manager that has not finished initialising).
+
+Bash tool reaches its 10-minute timeout mid-review
+: Claude Code's Bash tool caps at 10 minutes; the launch script polls
+  for up to 5 hours but the agent's call is cut off first. Pause the
+  review with `<leader>Rp`, let the Bash time out, then re-invoke
+  `/interactive-review` and pick the saved session from
+  `:CodeReviewSessions`. (Or submit faster.)
 
 ## Next
 
