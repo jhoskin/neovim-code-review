@@ -502,6 +502,30 @@ Your plugin manager has not loaded code-review yet.
   `~/.local/share/nvim/site/pack/plugins/start/neovim-code-review`
   and restart Neovim.
 
+#### The diff shows the wrong files (left and right don't match) after using a file picker
+
+If you open a file via Telescope, snacks-picker, fzf-lua, or
+`<leader>ff` while a review session is active, the picker opens that
+file in whatever window is currently focused — including diffview's
+left or right pane. Diffview's diff state then gets out of sync: one
+pane shows the original review file, the other shows the file you
+just picked.
+
+This is a footgun in the interaction model between diffview and
+external pickers, not a bug in the plugin. Two workarounds:
+
+- **Recommended**: navigate files using diffview's own file panel
+  (`<leader>e` toggles it, then `j`/`k` and `<CR>`). This keeps both
+  panes pointing at the same file's old and new versions.
+- **Recovery**: if you do desync the diff, run `:DiffviewRefresh` to
+  rebuild it. If that fails, cancel the review (`<leader>Rq`) and
+  start over.
+
+We tried locking the diff windows with `winfixbuf` so pickers would
+error out instead of corrupting the state, but diffview's own setup
+races with the lock and breaks. If you find a clean way to make this
+work, file an issue.
+
 #### `:CodeReview` opens but diffview never appears
 
 The plugin loaded but diffview did not. Run `:Lazy` and check that
