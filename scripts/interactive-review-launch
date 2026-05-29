@@ -1,0 +1,87 @@
+#!/usr/bin/env bash
+# interactive-review-launch — hand off to Neovim for an interactive code review.
+#
+# Spawns Neovim inside a detached tmux session (Neovim needs a real PTY,
+# which Claude Code's Bash tool does not provide), auto-attaches the
+# session in a new iTerm2 tab when possible, polls for the result file,
+# and prints the review JSON on submit.
+#
+# Usage:
+#   interactive-review-launch [<git-range>]
+#
+# Exit codes mirror the plugin:
+#   0  review submitted (JSON printed on stdout)
+#   1  error (diagnostic on stderr)
+#   2  user cancelled
+#
+# Dependencies: bash, tmux, jq, nvim (+ the neovim-code-review plugin).
+# Optional: it2 CLI for automatic iTerm2 tab attachment.
+
+set -euo pipefail
+
+range="${1:-}"
+
+# Reject git ranges that contain shell or Vim metacharacters. Legitimate
+# revision specs (HEAD~3..HEAD, main...HEAD, @^) never include `|`, `"`,
+# `\`, or newline — but each of those would let an attacker break out of
+# the `-c "CodeReview <range>"` invocation below.
+case "$range" in
+  *[\|\"\\]*|*$'\n'*)
+    printf 'interactive-review-launch: refusing unsafe argument: %s\n' "$range" >&2
+    exit 1
+    ;;
+esac
+
+session="code-review-$$"
+result_file=$(mktemp "${TMPDIR:-/tmp}/nvim-code-review.XXXXXX")
+sentinel="${result_file}.done"
+trap 'tmux kill-session -t "$session" 2>/dev/null; rm -f "$result_file" "$sentinel"' EXIT INT TERM HUP
+
+# Spawn nvim inside a detached tmux session so it gets a real PTY.
+tmux new-session -d -s "$session" -x 220 -y 60 \
+  "NVIM_CODE_REVIEW_RESULT='$result_file' nvim -c 'CodeReview $range'; echo \$? > '$sentinel'"
+
+# Auto-open a new iTerm2 tab and attach. Fall back to printing the
+# attach command for terminals without the it2 CLI.
+if command -v it2 >/dev/null 2>&1; then
+  it2 tab new >/dev/null
+  it2 session set-name "code review" >/dev/null 2>&1 || true
+  it2 run "tmux attach -t $session" >/dev/null
+  printf 'Review opened in a new iTerm2 tab (tmux session: %s).\n' "$session" >&2
+  printf 'Submit with <leader>Rs, cancel with <leader>Rq.\n' >&2
+else
+  printf 'Attach to the review with:  tmux attach -t %s\n' "$session" >&2
+  printf 'Then submit with <leader>Rs or cancel with <leader>Rq.\n' >&2
+fi
+
+# Poll for the sentinel file. 5-hour ceiling so long reviews are possible.
+start=$(date +%s)
+max_wait=18000  # 5 hours
+while [ ! -f "$sentinel" ]; do
+  sleep 0.5
+  now=$(date +%s)
+  if [ $((now - start)) -gt $max_wait ]; then
+    printf 'interactive-review-launch: timed out after %d seconds\n' "$max_wait" >&2
+    exit 1
+  fi
+done
+
+rc=$(cat "$sentinel")
+case "$rc" in
+  0)
+    review_path=$(cat "$result_file")
+    if [ -z "$review_path" ]; then
+      printf 'interactive-review-launch: empty result file\n' >&2
+      exit 1
+    fi
+    jq . "$review_path"
+    ;;
+  2)
+    printf 'review cancelled\n' >&2
+    exit 2
+    ;;
+  *)
+    printf 'neovim error (exit %s)\n' "$rc" >&2
+    exit "$rc"
+    ;;
+esac
