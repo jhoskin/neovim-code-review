@@ -29,6 +29,13 @@ acts on the feedback.
 - Multi-round review sessions (each session is independent)
 - Automatic staging or stashing of working tree changes
 - Structured verdict field (the reviewer's overall opinion goes in line or file comments)
+- Automatic prevention of external file pickers (telescope, fzf-lua,
+  snacks-picker, etc.) replacing the buffer in a diffview window
+  during a review session. `winfixbuf` was evaluated and rejected
+  because it races diffview's own buffer assignment during setup; the
+  design instead provides a one-key recovery path
+  (`:CodeReviewRefresh`) and detects the desynced state to prompt the
+  user (see section 4.11 and REQ-UIX-0011 through REQ-UIX-0015).
 
 ## 2. Architecture
 
@@ -595,6 +602,41 @@ remove them.
    stable surface than the Lua API, since they are part of diffview's
    documented user-facing contract.
 
+### 4.11 Recovery from layout desync
+
+External file pickers (telescope, fzf-lua, snacks-picker, the user's
+`<leader>ff` mapping, or anything else that invokes `:edit`/`:buffer`
+in the current window) can open an arbitrary file into one of
+diffview's diff windows during a review session. When that happens
+diffview's invariant breaks — the left pane still shows the original
+review file, the right pane shows the picked file.
+
+The design does not try to prevent this. `winfixbuf` was evaluated
+during initial development and rejected because diffview's own
+buffer assignment during setup hits the same code paths
+`winfixbuf` blocks; the lock either races setup (corrupting the
+initial keymap and read-only wiring) or has to be deferred so late
+that it offers no protection against the picker case. Future
+contributors: don't re-litigate this without reading the failure
+history in commit `687bfca` and the experiments around
+`DiffviewViewPostLayout`-deferred locks first.
+
+Instead the design provides:
+
+- **Detection** via a deferred `BufWinEnter` autocmd. After a tick
+  (so diffview's own panel-driven swaps settle), if the buffer in
+  a layout window is neither a `diffview://` synthetic buffer nor
+  the working-tree-side buffer expected for the current review
+  file, the system emits a single `vim.notify_once` with the
+  recovery key. (REQ-UIX-0011, REQ-UIX-0013.)
+- **Recovery** via `:CodeReviewRefresh` (and the bound keymap,
+  default `<leader>RR`), which wraps diffview's own
+  `:DiffviewRefresh` command. (REQ-UIX-0012, REQ-UIX-0015.)
+- **No auto-recovery.** The plugin never calls `:DiffviewRefresh`
+  on its own behalf. Auto-refreshing would lose scroll position,
+  surprise the user mid-action, and risk loops on false-positive
+  detections. (REQ-UIX-0014.)
+
 ## 5. CLI Interface Spec
 
 ### 5.1 Invocation
@@ -942,6 +984,38 @@ of confirming (e.g., "Confirming will copy the markdown below to your
 clipboard and close the review" in interactive mode, "Confirming will
 write to the result file and exit Neovim" in agent mode).
 
+**REQ-UIX-0011** (Event-driven): When a `BufWinEnter` event fires on
+a buffer that occupies a diffview layout window (left or right) and
+that buffer is neither (a) a buffer whose name starts with
+`diffview://` nor (b) the working-tree-side buffer expected for the
+current review file, the system shall emit a one-shot
+`vim.notify_once` warning naming the recovery action
+(`:CodeReviewRefresh` and the bound keymap). See section 4.11 for
+the rationale.
+
+**REQ-UIX-0012** (Event-driven): When the user invokes
+`:CodeReviewRefresh` or the bound recovery keymap, the system shall
+call diffview's `DiffviewRefresh` to rebuild the layout from the
+current review state.
+
+**REQ-UIX-0013** (Ubiquitous): The desync-detection autocmd shall
+defer via `vim.schedule` before checking, so diffview's own
+panel-driven buffer swaps (which complete synchronously after the
+triggering event) are not flagged as desync. False-positive
+notifications are worse than late ones in this design.
+
+**REQ-UIX-0014** (Ubiquitous): The system shall NOT auto-recover
+from a detected desync. Recovery is a user-initiated action via
+`:CodeReviewRefresh` or its keymap. Auto-recovery is excluded by
+design to avoid losing scroll position, surprising the user
+mid-action, and looping on false-positive detections.
+
+**REQ-UIX-0015** (Ubiquitous): The recovery keymap shall live under
+the `<leader>R` prefix family (default `<leader>RR`) and be
+configurable via `setup({ keymaps = { refresh = ... } })`, keeping
+all session-scoped review actions discoverable under one which-key
+group.
+
 ### 6.6 Error handling (REQ-ERR)
 
 **REQ-ERR-0001** (Unwanted-behavior): If the specified range resolves to zero
@@ -1102,6 +1176,11 @@ not on disk to begin with), unlike for diff buffers.
 | REQ-UIX-0008  | TST-UIX-0008  | Auto     | Verify `vim.api.nvim_buf_get_keymap()` on a diff buffer contains the documented default keys (`<leader>Rc`, `<leader>Rs`, etc.) |
 | REQ-UIX-0009  | TST-UIX-0009  | Auto     | Trigger `:CodeReviewSubmit`, capture the summary float content, verify it includes the markdown preamble from section 4.7 |
 | REQ-UIX-0010  | TST-UIX-0010  | Auto     | Call `setup({ keymaps = { add_comment = false, delete_comment = false } })`, start a review, verify those keys are not bound on diff buffers while other defaults are |
+| REQ-UIX-0011  | TST-UIX-0011  | Auto     | Programmatically swap a diff window's buffer to an unrelated buffer via `nvim_win_set_buf`; assert `:messages` contains the recovery hint string |
+| REQ-UIX-0012  | TST-UIX-0012  | Auto     | Run `:CodeReviewRefresh`; assert no error and both diff buffers are still populated and non-modifiable |
+| REQ-UIX-0013  | TST-UIX-0013  | Auto     | Navigate via diffview's panel from file 1 to file 2 (legitimate buffer swap); assert no desync hint appears in `:messages` |
+| REQ-UIX-0014  | TST-UIX-0014  | Auto     | Force desync, wait for the deferred check, assert the affected window still holds the stray buffer (no auto-refresh) |
+| REQ-UIX-0015  | TST-UIX-0015  | Auto     | Launch with `setup({ keymaps = { refresh = "<leader>Rx" } })`; assert `<leader>Rx` is bound on diff buffers and `<leader>RR` is not |
 | REQ-LSP-0001  | TST-LSP-0001  | Auto     | Start a review in a repo whose diff contains a `.md` file, verify no LSPs are attached to the diff buffers (covered by `test_13_diff_buffers_no_lsp.sh`) |
 | REQ-LSP-0002  | TST-LSP-0002  | Auto     | Open the comment float and summary float, verify both have filetype `codereview` (covered by `test_12_float_filetype.sh`) |
 | REQ-LSP-0003  | TST-LSP-0003  | Auto     | Open the comment float, verify no LSPs are attached after the filetype is set |
