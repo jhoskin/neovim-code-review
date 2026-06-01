@@ -164,6 +164,15 @@ function M.submit()
   end, nil, preview)
 end
 
+function M.refresh()
+  if not M._session then
+    return
+  end
+  -- DiffviewRefresh rebuilds the layout from the current review state.
+  -- See REQ-UIX-0012 and section 4.11.
+  pcall(vim.cmd, "DiffviewRefresh")
+end
+
 function M.cancel()
   if not M._session then
     return
@@ -488,6 +497,9 @@ function M._register_commands()
   vim.api.nvim_create_user_command("CodeReviewCancel", function()
     M.cancel()
   end, {})
+  vim.api.nvim_create_user_command("CodeReviewRefresh", function()
+    M.refresh()
+  end, {})
 end
 
 function M._cleanup()
@@ -496,6 +508,7 @@ function M._cleanup()
   pcall(vim.api.nvim_del_user_command, "CodeReviewPause")
   pcall(vim.api.nvim_del_user_command, "CodeReviewCopy")
   pcall(vim.api.nvim_del_user_command, "CodeReviewCancel")
+  pcall(vim.api.nvim_del_user_command, "CodeReviewRefresh")
   M._session = nil
 end
 
@@ -609,6 +622,7 @@ function M._set_file_panel_keymaps(bufnr)
   map(km.summary, M.submit, "Code review: submit (show summary)")
   map(km.cancel, M.cancel, "Code review: cancel review")
   map(km.pause, M.pause, "Code review: pause session")
+  map(km.refresh, M.refresh, "Code review: refresh diff layout")
 end
 
 function M._set_keymaps(bufnr)
@@ -626,6 +640,7 @@ function M._set_keymaps(bufnr)
   map(km.file_comment, M.add_file_comment, "Code review: add file comment")
   map(km.cancel, M.cancel, "Code review: cancel review")
   map(km.pause, M.pause, "Code review: pause session")
+  map(km.refresh, M.refresh, "Code review: refresh diff layout")
 end
 
 function M._apply_extmarks(bufnr)
