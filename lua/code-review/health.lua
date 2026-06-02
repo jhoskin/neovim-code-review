@@ -27,30 +27,6 @@ function M.check()
     vim.health.warn("Not inside a git repository (run :checkhealth from a repo)")
   end
 
-  -- diffview.nvim
-  local dv_ok, _ = pcall(require, "diffview")
-  if dv_ok then
-    vim.health.ok("diffview.nvim loaded")
-  else
-    vim.health.error("diffview.nvim not found", {
-      "Install dlyongemallo/diffview.nvim",
-      "Add to your plugin manager as a dependency",
-    })
-  end
-
-  -- diffview API
-  if dv_ok then
-    local lib_ok, lib = pcall(require, "diffview.lib")
-    if lib_ok and type(lib.get_current_view) == "function" then
-      vim.health.ok("diffview.nvim API compatible (get_current_view found)")
-    else
-      vim.health.error("diffview.nvim API incompatible", {
-        "Update diffview.nvim to the latest version",
-        "Required: diffview.lib.get_current_view()",
-      })
-    end
-  end
-
   -- Audit trail directory
   local data_dir = vim.fn.stdpath("data") .. "/code-review"
   if vim.fn.isdirectory(data_dir) == 1 then
