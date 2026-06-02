@@ -83,7 +83,17 @@ function Store:get_all_line_comments(path)
   table.sort(result, function(a, b)
     local a_line = a.new_lineno or a.old_lineno or 0
     local b_line = b.new_lineno or b.old_lineno or 0
-    return a_line < b_line
+    if a_line ~= b_line then
+      return a_line < b_line
+    end
+    -- Total order tie-breakers so serialization is deterministic when two
+    -- comments share a primary line number (e.g. an old-side and a new-side
+    -- comment whose new_lineno coincides). Otherwise table.sort order is
+    -- undefined and to_table output is non-reproducible.
+    if a.side ~= b.side then
+      return a.side < b.side
+    end
+    return (a.old_lineno or 0) < (b.old_lineno or 0)
   end)
   return result
 end
@@ -172,7 +182,12 @@ function Store:from_table(data)
         line.body
       )
       if line.diff_hunk and line.diff_hunk ~= "" then
-        self:set_diff_hunk(file_data.path, line.new_lineno or line.old_lineno, line.side, line.diff_hunk)
+        -- Key the hunk lookup the same way add_line_comment keys the comment:
+        -- old-side comments key on old_lineno, new-side on new_lineno. Using
+        -- new_lineno unconditionally dropped hunks on old-side comments whose
+        -- old/new linenos differed.
+        local key_lineno = line.side == "old" and line.old_lineno or line.new_lineno
+        self:set_diff_hunk(file_data.path, key_lineno, line.side, line.diff_hunk)
       end
     end
     if file_data.comment then
