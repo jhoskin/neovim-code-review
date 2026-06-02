@@ -75,7 +75,11 @@ end
 -- Run git and return raw stdout (untrimmed) plus a success flag. Used where
 -- exact byte content matters (file_contents), unlike M._git which trims.
 function M._git_raw(args)
-  local cmd = { "git" }
+  -- core.quotePath=false: git defaults to octal-escaping and double-quoting any
+  -- path with non-ASCII bytes (e.g. café.lua, 数据.md). That quoted form would
+  -- be split wrong and fed back into `git show <sha>:<path>`, which then fails
+  -- and renders the file blank. Forcing it off keeps UTF-8 paths literal.
+  local cmd = { "git", "-c", "core.quotePath=false" }
   for _, arg in ipairs(args) do
     table.insert(cmd, arg)
   end
@@ -130,10 +134,10 @@ function M.changed_files(diff_info)
   local entries = {}
   local seen = {}
 
-  local function add(path, status)
+  local function add(path, status, old_path)
     if not seen[path] then
       seen[path] = true
-      entries[#entries + 1] = { path = path, status = status }
+      entries[#entries + 1] = { path = path, status = status, old_path = old_path }
     end
   end
 
@@ -149,14 +153,18 @@ function M.changed_files(diff_info)
       -- Fields are tab-separated: STATUS\tPATH  (rename: R100\tOLD\tNEW).
       local fields = vim.split(line, "\t", { plain = true })
       local letter = fields[1]:sub(1, 1)
-      local path
+      local path, old_path
       if letter == "R" or letter == "C" then
+        -- Rename/copy: fields = STATUS, OLD, NEW. The diff is OLD -> NEW, so the
+        -- old side must be read from the OLD path; without it `git show
+        -- base:NEW` fails and the whole file renders as an addition.
         path = fields[3] or fields[2]
+        old_path = fields[2]
       else
         path = fields[2]
       end
       if path and path ~= "" then
-        add(path, map_status(letter))
+        add(path, map_status(letter), old_path)
       end
     end
   end
@@ -173,15 +181,17 @@ function M.changed_files(diff_info)
   return entries
 end
 
--- file_contents(diff_info, path) -> old_lines, new_lines.
--- old: `git show <base_sha>:<path>`, or {} if the file did not exist in base.
+-- file_contents(diff_info, path[, old_path]) -> old_lines, new_lines.
+-- old: `git show <base_sha>:<old_path>`, or {} if the file did not exist in
+--      base. old_path defaults to path; for a rename it is the pre-rename name.
 -- new: working_tree reads the working-tree file; ranges use
 --      `git show <head_sha>:<path>`. {} if the file is absent on the new side.
-function M.file_contents(diff_info, path)
+function M.file_contents(diff_info, path, old_path)
+  old_path = old_path or path
   local old_lines
   local base = diff_info.base_sha or diff_info.base
   if base then
-    local old_out = M._git_raw({ "show", base .. ":" .. path })
+    local old_out = M._git_raw({ "show", base .. ":" .. old_path })
     old_lines = old_out and split_lines(old_out) or {}
   else
     old_lines = {}
@@ -232,7 +242,7 @@ function M.validate_range(range_str)
 end
 
 function M._git(args)
-  local cmd = { "git" }
+  local cmd = { "git", "-c", "core.quotePath=false" }
   for _, arg in ipairs(args) do
     table.insert(cmd, arg)
   end

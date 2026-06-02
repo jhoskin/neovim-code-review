@@ -277,8 +277,8 @@ function M.add_comment()
       local old_lineno = side == "old" and lineno or nil
       local new_lineno = side == "new" and lineno or nil
       M._session.store:add_line_comment(file_path, old_lineno, new_lineno, side, body)
-      -- Cheapest correct repaint: re-render the current file from the store.
-      render.switch_file(file_path)
+      -- Comment-only repaint: just the markers + panel counts, no buffer refill.
+      render.repaint_comments()
     end,
   })
 end
@@ -304,7 +304,7 @@ function M.add_file_comment()
     prefill = prefill,
     on_confirm = function(body)
       M._session.store:add_file_comment(file_path, body)
-      render.switch_file(file_path)
+      render.repaint_comments()
     end,
   })
 end
@@ -322,7 +322,7 @@ function M.delete_comment()
   local file_path, side, lineno = ctx.path, ctx.side, ctx.lineno
 
   if M._session.store:delete_line_comment(file_path, lineno, side) then
-    render.switch_file(file_path)
+    render.repaint_comments()
   end
 end
 
@@ -400,21 +400,39 @@ end
 function M._register_autocmds()
   local group = vim.api.nvim_create_augroup("code_review_session", { clear = true })
 
-  -- Closing the review windows (e.g. :q in the renderer tab) ends the session.
-  -- In agent mode that means a cancel exit.
+  -- Closing the whole review (the last renderer window) ends the session; in
+  -- agent mode that is a cancel exit. A :q on a single pane while the other
+  -- renderer windows remain must NOT discard the review or exit the process.
   vim.api.nvim_create_autocmd("QuitPre", {
     group = group,
     callback = function()
-      if M._session and not M._session.submitted then
-        local agent_mode = vim.env.NVIM_CODE_REVIEW_RESULT ~= nil
-          and vim.env.NVIM_CODE_REVIEW_RESULT ~= ""
-        M._cleanup()
-        if agent_mode then
-          vim.schedule(function()
-            review.exit_cancel()
-          end)
+      if not (M._session and not M._session.submitted) then
+        return
+      end
+      local render = require("code-review.render.init")
+      local wins = render.review_windows()
+      local cur = vim.api.nvim_get_current_win()
+      local is_review = false
+      for _, w in ipairs(wins) do
+        if w == cur then
+          is_review = true
+          break
         end
       end
+      -- Not a renderer window, or other renderer windows still open -> ignore.
+      if not is_review or #wins > 1 then
+        return
+      end
+      local agent_mode = vim.env.NVIM_CODE_REVIEW_RESULT ~= nil
+        and vim.env.NVIM_CODE_REVIEW_RESULT ~= ""
+      M._cleanup()
+      -- Defer teardown out of the QuitPre callback (the window is mid-close).
+      vim.schedule(function()
+        render.close()
+        if agent_mode then
+          review.exit_cancel()
+        end
+      end)
     end,
   })
 end
