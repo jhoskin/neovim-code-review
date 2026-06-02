@@ -29,13 +29,6 @@ acts on the feedback.
 - Multi-round review sessions (each session is independent)
 - Automatic staging or stashing of working tree changes
 - Structured verdict field (the reviewer's overall opinion goes in line or file comments)
-- Automatic prevention of external file pickers (telescope, fzf-lua,
-  snacks-picker, etc.) replacing the buffer in a diffview window
-  during a review session. `winfixbuf` was evaluated and rejected
-  because it races diffview's own buffer assignment during setup; the
-  design instead provides a one-key recovery path
-  (`:CodeReviewRefresh`) and detects the desynced state to prompt the
-  user (see section 4.11 and REQ-UIX-0011 through REQ-UIX-0015).
 
 ## 2. Architecture
 
@@ -43,11 +36,11 @@ acts on the feedback.
 ┌─────────────────────────────────────────────┐
 │                  Neovim >= 0.10              │
 │                                             │
-│  ┌──────────────┐    ┌───────────────────┐  │
-│  │ code-review  │───>│  diffview.nvim    │  │
-│  │   plugin     │    │  (diff rendering) │  │
-│  │   (Lua)      │    └───────────────────┘  │
-│  │              │                           │
+│  ┌──────────────┐    ┌───────────────────────────────────┐  │
+│  │ code-review  │───>│  diff renderer (side-by-side,     │  │
+│  │   plugin     │    │  pure Lua: nofile scratch buffers │  │
+│  │   (Lua)      │    │  + window layout + treesitter)    │  │
+│  │              │    └───────────────────────────────────┘  │
 │  │  ┌────────────────────────────────┐      │
 │  │  │ comment layer                  │      │
 │  │  │ (extmarks + virtual text)      │      │
@@ -70,19 +63,16 @@ acts on the feedback.
 | Dependency    | Version   | Purpose                        |
 |---------------|-----------|--------------------------------|
 | Neovim        | >= 0.10   | `vim.system()` (added in 0.10), `sign_text` in extmarks (added in 0.10), `nvim_buf_set_extmark` with `virt_lines` (added in 0.8). The binding floor is `vim.system()`. |
-| diffview.nvim | latest    | Diff rendering ([dlyongemallo/diffview.nvim](https://github.com/dlyongemallo/diffview.nvim)). Required because upstream sindrets/diffview.nvim is archived. If upstream revives or a community fork supersedes this one, switch to it. |
 | git           | >= 2.30   | Read-only operations (`git diff`, `git rev-parse`, `git merge-base`). All commands used are available since git 1.x; the 2.30 floor may be lowerable. |
 
 ### 2.2 Data flow
 
 1. Agent invokes `nvim -c 'CodeReview <range>'`
-2. Plugin parses the range, opens diffview via `:DiffviewOpen <args>` (executed
-   with `vim.cmd`). For a working-tree diff: `:DiffviewOpen`. For a commit
-   range: `:DiffviewOpen <base>..<head>`. For branch divergence:
-   `:DiffviewOpen <base>...<head>`. For a single commit:
-   `:DiffviewOpen <commit>^..<commit>`.
-   Side detection and file path resolution use diffview's Lua API (see
-   section 4.4 and 4.10 for details and stability contract).
+2. Plugin parses the range, runs `git diff` for the resolved spec, builds
+   per-file old/new `nofile` buffers, and opens the side-by-side layout (file
+   panel + two diff windows). Side (old/new) and repo-relative path come from
+   the plugin's own window/buffer registry. (See section 4.4 for the renderer
+   internals.)
 3. User navigates diffs, adds comments via keybindings
 4. Comments are held in memory and rendered as extmarks
 5. User finishes review (`:CodeReviewSubmit` or summary confirmation). If the
@@ -266,12 +256,12 @@ rm -rf ~/.local/share/nvim/code-review/<project-hash>/
 
 #### SCR-DIFF-01: Diff view
 
-The primary screen. Delegated to diffview.nvim with custom keybindings
-registered on top.
+The primary screen. Rendered by the plugin's built-in side-by-side diff
+renderer.
 
-**Layout**: diffview's default file-panel + diff-panel layout. The file panel
-lists changed files. The diff panel shows side-by-side or inline diff for the
-selected file.
+**Layout**: a file-panel + diff-panel layout. The file panel lists changed
+files. The diff panel shows the side-by-side old/new diff for the selected
+file.
 
 **Comment rendering**: Existing comments appear as extmarks with virtual text
 below the commented line. The virtual text uses a distinct highlight group
@@ -282,8 +272,8 @@ API objects):
 
 | Logical ID             | Neovim object              | Description                          |
 |------------------------|----------------------------|--------------------------------------|
-| `panel.file-list`      | diffview file-panel buffer | diffview file panel                  |
-| `panel.diff`           | diffview diff-panel buffer | diffview diff panel                  |
+| `panel.file-list`      | plugin file-panel buffer   | The plugin's file panel              |
+| `panel.diff`           | old/new diff buffers       | The plugin's old and new diff buffers |
 | `extmark.comment`      | namespace + extmark ID     | Inline comment virtual text          |
 | `extmark.file-comment` | namespace + extmark ID     | File-level comment indicator         |
 
@@ -327,22 +317,23 @@ comments grouped by file, with line numbers. The user can confirm or cancel.
 ### 4.2 Keybindings
 
 All keybindings are buffer-local mappings set via
-`vim.keymap.set("n", key, fn, { buffer = bufnr })` on each diffview buffer.
-The plugin sets these mappings in response to diffview's `view_opened` event
-(or equivalent autocmd on diff buffers). Mappings are removed automatically
-when the buffer is wiped.
+`vim.keymap.set("n", key, fn, { buffer = bufnr })`. The plugin sets these
+mappings when it creates each diff or panel buffer. Mappings are removed
+automatically when the buffer is wiped.
 
 For the file panel, mappings are set on the file-panel buffer (filetype
-`DiffviewFiles`). For the diff panel, mappings are set on each diff buffer.
+`codereview-panel`). For the diff panel, mappings are set on each diff buffer.
 
-Default mappings (user configurable):
+Default mappings (user configurable; see REQ-UIX-0008):
 
 | Key          | Context        | Action                                  |
 |--------------|----------------|-----------------------------------------|
-| `<leader>cc` | diff panel    | Add line comment at cursor              |
-| `<leader>cf` | file panel    | Add file-level comment for file under cursor (resolved via diffview's file-entry API or by parsing the file-panel buffer line) |
-| `<leader>cd` | diff panel    | Delete comment at cursor                |
-| `<leader>cs` | any           | Show review summary and confirm         |
+| `<leader>Rc` | diff panel    | Add line comment at cursor              |
+| `<leader>Rf` | file panel    | Add file-level comment for file under cursor (resolved by parsing the plugin's file-panel buffer line) |
+| `<leader>Rd` | diff panel    | Delete comment at cursor                |
+| `<leader>Rs` | any           | Show review summary and submit          |
+| `<leader>Rq` | any           | Cancel review                           |
+| `<leader>Rp` | any           | Pause review                            |
 | `<C-s>`      | comment float | Confirm comment (works in any mode)     |
 | `q`          | comment float | Cancel comment, close float             |
 | `q`          | summary       | Cancel summary, return to diff          |
@@ -389,77 +380,45 @@ these without load-order issues.
    discoverable indicator even when the user is scrolled away from the
    virtual line.
 
-**Buffer lifecycle**: diffview.nvim creates and destroys diff buffers as the
+**Buffer lifecycle**: the plugin creates and destroys diff buffers as the
 user navigates files. Extmarks are buffer-local and are lost when a buffer is
-wiped. The plugin shall re-apply extmarks from its in-memory comment store
-whenever diffview opens a new buffer for a file that has comments. The plugin
-shall listen for `BufWinEnter` or diffview's `view_opened` callback to trigger
-re-application.
+wiped. The plugin re-applies extmarks from its in-memory comment store
+whenever it (re)creates a file's diff buffers, with a `BufWinEnter` autocmd as
+a safety net.
 
-### 4.4 Diffview integration
+### 4.4 Diff renderer internals
 
-The plugin integrates with diffview.nvim through two mechanisms: `User`
-autocmd events and the `require("diffview.lib")` module.
+The plugin owns the layout. It keeps a window registry that maps each layout
+window to a side (`old` or `new`) and a repo-relative path.
 
-**Autocmd events used** (registered when `:CodeReview` opens diffview):
-
-| Event | Trigger | Plugin action |
-|-------|---------|---------------|
-| `User DiffviewDiffBufRead` | A diff buffer is created and loaded | Set buffer-local keymaps, apply extmarks from comment store |
-| `User DiffviewDiffBufWinEnter` | A diff buffer enters a window | Re-apply extmarks unconditionally (safety net for buffer reuse) |
-| `User DiffviewViewClosed` | The diffview tab is closed | Trigger cancel exit path if review not yet submitted |
-
-All autocmds are created in a dedicated `augroup` (`code_review_session`)
-and cleared when the review session ends.
-
-**Side detection**: In diffview's Diff2 layout, `view.cur_layout.a` is the
-left (old/base) window and `view.cur_layout.b` is the right (new/head)
-window. Each has an `.id` field containing the Neovim window ID. The plugin
-compares `vim.api.nvim_get_current_win()` against these to determine side:
+**Side detection**: the plugin compares `vim.api.nvim_get_current_win()`
+against the stored old-window and new-window IDs for the current file:
 
 ```lua
-local view = require("diffview.lib").get_current_view()
 local win = vim.api.nvim_get_current_win()
-if win == view.cur_layout.a.id then
+if win == registry.old_win then
   side = "old"
-elseif win == view.cur_layout.b.id then
+elseif win == registry.new_win then
   side = "new"
 end
 ```
 
-**File path resolution**: The plugin resolves the repository-relative file
-path using diffview's view API:
-
-```lua
-local view = require("diffview.lib").get_current_view()
-local file = view:infer_cur_file()
-local path = file.path  -- repo-relative string
-```
+**File path resolution**: the repo-relative path is read from the registry
+entry for the current diff window. No external API is consulted.
 
 For the file panel (when adding file-level comments), the file under the
-cursor is resolved via:
+cursor is resolved by parsing the plugin's own panel buffer line at the
+cursor row.
 
-```lua
-local item = view.panel:get_item_at_cursor()
-local path = item.path
-```
-
-**Buffer lifecycle**: diffview reuses diff buffers by default when the user
-navigates between files. Extmarks set on a buffer persist across file
-switches as long as the buffer is not wiped. The plugin re-applies extmarks
-on every `DiffviewDiffBufWinEnter` event regardless, so comments remain
-visible even if a buffer is recreated.
+**Buffer lifecycle**: the plugin re-renders the two diff buffers when the
+user selects a different file in the panel. Extmarks are re-applied from the
+comment store on (re)creation, with a `BufWinEnter` autocmd as a safety net,
+so comments remain visible even if a buffer is recreated.
 
 **Floating windows**: Floating windows (SCR-COMMENT-01, SCR-SUMMARY-01)
-are independent Neovim windows. diffview uses tab-scoped layout and does
+are independent Neovim windows. The renderer's layout is tab-scoped and does
 not close or rearrange windows it did not create. No special handling is
 needed.
-
-**Keybinding conflict avoidance**: diffview's default keybindings use
-single-character keys (`a`, `x`, `-`, `s`, `gf`). The plugin's defaults
-use `<leader>` prefixed chords (`<leader>cc`, `<leader>cf`) to avoid
-collisions. Both use buffer-local mappings; if a conflict occurs, the later
-mapping wins. Users can resolve conflicts via `keymaps` in `setup()`.
 
 ### 4.5 Plugin configuration
 
@@ -469,10 +428,12 @@ convention:
 ```lua
 require("code-review").setup({
   keymaps = {
-    add_comment = "<leader>cc",
-    file_comment = "<leader>cf",
-    delete_comment = "<leader>cd",
-    summary = "<leader>cs",
+    add_comment = "<leader>Rc",
+    file_comment = "<leader>Rf",
+    delete_comment = "<leader>Rd",
+    summary = "<leader>Rs",
+    cancel = "<leader>Rq",
+    pause = "<leader>Rp",
     confirm_comment = "<C-s>",
   },
   highlights = {
@@ -490,7 +451,7 @@ require("code-review").setup({
 session is active. It triggers the summary screen (SCR-SUMMARY-01). If the
 user confirms, the review is saved. The command is removed when no review
 session is active. It is equivalent to pressing the summary keybinding
-(`<leader>cs`).
+(`<leader>Rs`).
 
 ### 4.7 `:CodeReviewCopy` command
 
@@ -535,7 +496,7 @@ comments.)` after the preamble.
 ### 4.8 Session management
 
 **`:CodeReviewPause`**: Saves the current review session state and closes
-the diffview UI. The session is stored at
+the diff UI. The session is stored at
 `~/.local/share/nvim/code-review/<project-hash>/sessions/<session-id>.json`.
 Neovim does not exit. The user returns to their normal editing session.
 
@@ -548,8 +509,8 @@ Session state includes:
 
 **`:CodeReviewSessions`**: Lists saved sessions for the current project in
 a floating window. Each entry shows the diff range, comment count, and
-last modified date. Selecting an entry resumes the session: opens diffview
-with the same range, restores all comments and extmarks.
+last modified date. Selecting an entry resumes the session: opens the diff
+view with the same range, restores all comments and extmarks.
 
 **Session lifecycle**:
 
@@ -571,71 +532,6 @@ cancellation, not as an empty review.
 **Working-tree review caveat**: The review JSON captures the diff as it
 appeared at review time. Subsequent edits to the working tree are not
 reflected in the stored `diff_hunk` context.
-
-### 4.10 Diffview API dependency
-
-The plugin accesses diffview's Lua modules directly:
-
-| Module | Functions used | Purpose |
-|--------|---------------|---------|
-| `require("diffview.lib")` | `get_current_view()` | Obtain the active View object |
-| View object | `infer_cur_file()`, `cur_layout.a.id`, `cur_layout.b.id` | File path and side detection |
-| Panel object | `get_item_at_cursor()` | File under cursor in file panel |
-
-These are internal APIs used by diffview's own actions module. They are not
-part of a documented stability contract. A diffview update could rename or
-remove them.
-
-**Mitigation**:
-
-1. The plugin wraps all diffview API access in a single module
-   (`lua/code-review/diff.lua`). If diffview changes its API, only this
-   module needs updating.
-2. At startup, the plugin verifies that the required functions exist:
-   ```lua
-   local ok, lib = pcall(require, "diffview.lib")
-   if not ok or type(lib.get_current_view) ~= "function" then
-     -- exit with code 1 and diagnostic (REQ-ERR-0009)
-   end
-   ```
-3. The `User` autocmd events (`DiffviewDiffBufRead`, etc.) are a more
-   stable surface than the Lua API, since they are part of diffview's
-   documented user-facing contract.
-
-### 4.11 Recovery from layout desync
-
-External file pickers (telescope, fzf-lua, snacks-picker, the user's
-`<leader>ff` mapping, or anything else that invokes `:edit`/`:buffer`
-in the current window) can open an arbitrary file into one of
-diffview's diff windows during a review session. When that happens
-diffview's invariant breaks — the left pane still shows the original
-review file, the right pane shows the picked file.
-
-The design does not try to prevent this. `winfixbuf` was evaluated
-during initial development and rejected because diffview's own
-buffer assignment during setup hits the same code paths
-`winfixbuf` blocks; the lock either races setup (corrupting the
-initial keymap and read-only wiring) or has to be deferred so late
-that it offers no protection against the picker case. Future
-contributors: don't re-litigate this without reading the failure
-history in commit `687bfca` and the experiments around
-`DiffviewViewPostLayout`-deferred locks first.
-
-Instead the design provides:
-
-- **Detection** via a deferred `BufWinEnter` autocmd. After a tick
-  (so diffview's own panel-driven swaps settle), if the buffer in
-  a layout window is neither a `diffview://` synthetic buffer nor
-  the working-tree-side buffer expected for the current review
-  file, the system emits a single `vim.notify_once` with the
-  recovery key. (REQ-UIX-0011, REQ-UIX-0013.)
-- **Recovery** via `:CodeReviewRefresh` (and the bound keymap,
-  default `<leader>RR`), which wraps diffview's own
-  `:DiffviewRefresh` command. (REQ-UIX-0012, REQ-UIX-0015.)
-- **No auto-recovery.** The plugin never calls `:DiffviewRefresh`
-  on its own behalf. Auto-refreshing would lose scroll position,
-  surprise the user mid-action, and risk loops on false-positive
-  detections. (REQ-UIX-0014.)
 
 ## 5. CLI Interface Spec
 
@@ -660,7 +556,7 @@ multiplexer.
 | `<rev>...<rev>` | Symmetric difference (merge-base to tip, equivalent to `git diff A...B`) | `CodeReview main...feature` |
 
 **Validation**: The plugin validates the range argument before opening
-diffview. If the range does not parse as one of the four formats above, or if
+the diff view. If the range does not parse as one of the four formats above, or if
 the referenced revisions do not exist, the plugin exits with code 1 and a
 diagnostic (see REQ-ERR-0001, REQ-ERR-0007).
 
@@ -691,11 +587,9 @@ determined by whether `$NVIM_CODE_REVIEW_RESULT` is set:
 
 - Write the review JSON to the audit trail directory (section 3.1)
 - Write the audit trail file path to `$NVIM_CODE_REVIEW_RESULT`
-- Force-quit Neovim via `:quitall!`. The `!` is required because
-  diffview's right-side buffer in a working-tree review is the live
-  editable file on disk, which Neovim flags as modified even though
-  REQ-DIF-0007 makes the buffer non-modifiable from the user's
-  perspective. A plain `:quitall` would prompt to save.
+- Force-quit Neovim via `:quitall!`. With `nofile` diff buffers nothing is
+  flagged modified, so the `!` is not strictly needed; it stays as a
+  defensive guard against any incidental modified scratch state.
 - Exit code: 0
 
 **Submit, interactive mode** (`$NVIM_CODE_REVIEW_RESULT` unset):
@@ -703,7 +597,7 @@ determined by whether `$NVIM_CODE_REVIEW_RESULT` is set:
 - Write the review JSON to the audit trail directory (section 3.1)
 - Export the review as GitHub-flavored Markdown to the system clipboard
   (same format as `:CodeReviewCopy`)
-- Close diffview, end the review session, leave Neovim running
+- Close the diff view, end the review session, leave Neovim running
 - Notify the user with the audit trail path and a confirmation that the
   clipboard was populated
 - No exit code (Neovim does not exit)
@@ -721,7 +615,7 @@ with an empty `files` array.
 **Cancel, interactive mode** (`$NVIM_CODE_REVIEW_RESULT` unset):
 
 - No audit trail file is written
-- Close diffview, end the review session, leave Neovim running
+- Close the diff view, end the review session, leave Neovim running
 - Notify the user that the review was cancelled
 - No exit code
 
@@ -730,7 +624,7 @@ with an empty `files` array.
 - Print diagnostic message to stderr in the format:
   `code-review: <error-type>: <human-readable message>`
   where `<error-type>` is one of: `invalid_range`, `no_git`, `not_a_repo`,
-  `no_diffview`, `version_error`, `storage_error`, `plugin_error`
+  `version_error`, `storage_error`, `plugin_error`
 - Exit code: 1
 - No review file is created
 - Result file is not written
@@ -782,8 +676,8 @@ Requirements use EARS (Easy Approach to Requirements Syntax) patterns:
 
 ### 6.1 Diff display (REQ-DIF)
 
-**REQ-DIF-0001** (Ubiquitous): The system shall display diffs using
-diffview.nvim in the layout defined by SCR-DIFF-01.
+**REQ-DIF-0001** (Ubiquitous): The system shall display diffs using its
+built-in side-by-side renderer in the layout defined by SCR-DIFF-01.
 
 **REQ-DIF-0002** (Event-driven): When invoked with no range argument, the system
 shall display the working tree diff against HEAD.
@@ -805,11 +699,10 @@ changes.
 
 **REQ-DIF-0007** (State-driven): While a review session is active, all
 diff buffers (both old and new sides, all diff types) shall be set
-non-modifiable so the user cannot accidentally edit the source files
-through the diff view. The plugin sets `vim.bo[bufnr].modifiable = false`
-on each diff buffer when it enters a window. Diffview's own staging
-actions, which mutate the working tree, are not affected because they do
-not write through the buffer.
+non-modifiable so the user cannot accidentally edit through the diff view.
+The plugin sets `vim.bo[bufnr].modifiable = false` on each diff buffer after
+its lines are filled. The new-side buffer is a `nofile` copy of the head
+content, not the on-disk file.
 
 ### 6.2 Commenting (REQ-CMT)
 
@@ -899,7 +792,7 @@ code 0.
 
 **REQ-CLI-0005** (Event-driven): When a review session ends normally in
 interactive mode (`$NVIM_CODE_REVIEW_RESULT` is unset), the system shall
-close diffview and leave Neovim running, without exiting.
+close the diff view and leave Neovim running, without exiting.
 
 **REQ-CLI-0003** (Event-driven): When the user executes `:CodeReviewCopy`,
 the system shall export the current review as GitHub-flavored Markdown
@@ -912,14 +805,14 @@ needing the plugin installed.
 
 **REQ-CLI-0006** (Event-driven): When the user executes `:CodeReviewCancel`
 during an active review session, the system shall discard all in-memory
-comments, close diffview, and:
+comments, close the diff view, and:
 - In agent mode (`$NVIM_CODE_REVIEW_RESULT` set), exit Neovim with code 2.
 - In interactive mode, leave Neovim running and display a `vim.notify`
   message confirming the cancellation.
 
 **REQ-CLI-0007** (Event-driven): When the user executes `:CodeReviewPause`
 during an active review session, the system shall save the session JSON
-(per REQ-SES-0003) to the sessions directory, close diffview, leave
+(per REQ-SES-0003) to the sessions directory, close the diff view, leave
 Neovim running, and display a `vim.notify` message containing the saved
 session ID.
 
@@ -984,38 +877,6 @@ of confirming (e.g., "Confirming will copy the markdown below to your
 clipboard and close the review" in interactive mode, "Confirming will
 write to the result file and exit Neovim" in agent mode).
 
-**REQ-UIX-0011** (Event-driven): When a `BufWinEnter` event fires on
-a buffer that occupies a diffview layout window (left or right) and
-that buffer is neither (a) a buffer whose name starts with
-`diffview://` nor (b) the working-tree-side buffer expected for the
-current review file, the system shall emit a one-shot
-`vim.notify_once` warning naming the recovery action
-(`:CodeReviewRefresh` and the bound keymap). See section 4.11 for
-the rationale.
-
-**REQ-UIX-0012** (Event-driven): When the user invokes
-`:CodeReviewRefresh` or the bound recovery keymap, the system shall
-call diffview's `DiffviewRefresh` to rebuild the layout from the
-current review state.
-
-**REQ-UIX-0013** (Ubiquitous): The desync-detection autocmd shall
-defer via `vim.schedule` before checking, so diffview's own
-panel-driven buffer swaps (which complete synchronously after the
-triggering event) are not flagged as desync. False-positive
-notifications are worse than late ones in this design.
-
-**REQ-UIX-0014** (Ubiquitous): The system shall NOT auto-recover
-from a detected desync. Recovery is a user-initiated action via
-`:CodeReviewRefresh` or its keymap. Auto-recovery is excluded by
-design to avoid losing scroll position, surprising the user
-mid-action, and looping on false-positive detections.
-
-**REQ-UIX-0015** (Ubiquitous): The recovery keymap shall live under
-the `<leader>R` prefix family (default `<leader>RR`) and be
-configurable via `setup({ keymaps = { refresh = ... } })`, keeping
-all session-scoped review actions discoverable under one which-key
-group.
-
 ### 6.6 Error handling (REQ-ERR)
 
 **REQ-ERR-0001** (Unwanted-behavior): If the specified range resolves to zero
@@ -1033,11 +894,6 @@ stderr.
 created or written to, then the system shall exit with code 1 and print a
 diagnostic to stderr.
 
-**REQ-ERR-0005** (Unwanted-behavior): If diffview.nvim is not installed or
-cannot be loaded, then the system shall display a diagnostic in the Neovim
-message area, print a diagnostic to stderr identifying the missing dependency,
-and exit with code 1.
-
 **REQ-ERR-0006** (Unwanted-behavior): If the Neovim version is below 0.10, then
 the system shall exit with code 1 and print a diagnostic to stderr identifying
 the minimum required version.
@@ -1046,11 +902,6 @@ the minimum required version.
 that cannot be resolved by git, then the system shall exit with code 1 and print
 a diagnostic to stderr identifying the unresolvable revision.
 
-**REQ-ERR-0009** (Unwanted-behavior): If the required diffview.nvim API
-functions (`get_current_view`, `infer_cur_file`, `get_item_at_cursor`) are
-not available, then the system shall exit with code 1 and print a
-diagnostic to stderr identifying the incompatible diffview version.
-
 **REQ-ERR-0008** (Unwanted-behavior): If stdin is not a TTY, then the system
 shall exit with code 1 and print a diagnostic to stderr.
 
@@ -1058,7 +909,7 @@ shall exit with code 1 and print a diagnostic to stderr.
 
 **REQ-SES-0001** (Event-driven): When the user executes `:CodeReviewPause`,
 the system shall save the current session state to the sessions directory
-and close the diffview UI without exiting Neovim.
+and close the diff UI without exiting Neovim.
 
 **REQ-SES-0002** (Event-driven): When the user executes
 `:CodeReviewSessions`, the system shall display a list of saved sessions
@@ -1069,8 +920,8 @@ the diff range, and the timestamp of creation and last
 modification.
 
 **REQ-SES-0004** (Event-driven): When the user selects a session from the
-session list, the system shall resume the session by opening diffview with
-the saved range and restoring all comments.
+session list, the system shall resume the session by opening the diff view
+with the saved range and restoring all comments.
 
 **REQ-SES-0005** (Event-driven): When a resumed session is submitted, the
 system shall delete the session file.
@@ -1084,23 +935,12 @@ When the user selects an entry, the system shall resume that session.
 ### 6.8 LSP handling (REQ-LSP)
 
 Third-party LSP clients configured for `markdown` (such as Marksman) can
-crash when diffview closes a `.md` diff buffer, because diffview's
-synthetic buffer URI (`diffview:///path/.git/:0:/README.md`) does not
-resolve to a real file on disk and the LSP's `textDocument/didClose`
-handler may attempt to re-read the file. This category of requirements
-isolates the plugin's diff buffers and floats from such LSPs.
-
-**REQ-LSP-0001** (State-driven): While a review session is active, for
-every diff buffer the plugin sees (via `DiffviewDiffBufRead` and
-`DiffviewDiffBufWinEnter`), the plugin shall gracefully stop every LSP
-client currently attached to that buffer using
-`vim.lsp.stop_client(client_id, false)` (force=false). Graceful stop
-sends the LSP `shutdown` request followed by `exit` notification, so the
-server terminates with exit code 0 and Neovim does not surface an error.
-This avoids both the Marksman `closeDoc` crash (caused by per-buffer
-`textDocument/didClose`) and the SIGTERM exit code 143 notification
-caused by force-stop. The plugin shall also register a buffer-local
-`LspAttach` autocmd that gracefully stops any LSP that attaches later.
+crash when a transient scratch buffer is deleted, because the buffer does
+not resolve to a real file on disk and the LSP's `textDocument/didClose`
+handler may attempt to re-read the file. The plugin's diff buffers avoid
+this entirely by being `buftype=nofile` (see REQ-RND-0005), which prevents
+LSP attach. This category of requirements isolates the plugin's floats from
+such LSPs.
 
 **REQ-LSP-0002** (Ubiquitous): The comment input float (SCR-COMMENT-01)
 and the summary float (SCR-SUMMARY-01) shall use the custom filetype
@@ -1115,11 +955,48 @@ buffer-local `LspAttach` autocmd to detach any client that attaches
 later. Detach is safe for floats (the buffer is transient and the URI is
 not on disk to begin with), unlike for diff buffers.
 
+### 6.9 Diff renderer (REQ-RND)
+
+**REQ-RND-0001** (Ubiquitous): Line-level diffs shall be computed with the
+built-in `vim.diff()` using `result_type="indices"`,
+`algorithm="histogram"`, `linematch=60`, and `indent_heuristic=true`.
+
+**REQ-RND-0002** (Ubiquitous): Within a changed hunk where old and new line
+counts permit, the system shall compute and highlight word/character-level
+intra-line differences using a pure-Lua token diff.
+
+**REQ-RND-0003** (Ubiquitous): Each diff buffer shall have treesitter
+highlighting started via `vim.treesitter.start(buf, lang)` after its lines
+are set. The buffer must be loaded; an unloaded buffer yields an empty tree.
+
+**REQ-RND-0004** (Ubiquitous): The old and new sides shall be visually
+aligned with filler rows so corresponding lines occupy the same screen row.
+
+**REQ-RND-0005** (Ubiquitous): Diff buffers shall be created with
+`buftype=nofile`, `buflisted=false`, `bufhidden=wipe`, set
+`modifiable=false` after fill, and their windows locked with
+`winfixbuf=true`. As a consequence no LSP client attaches to them.
+
+**REQ-RND-0006** (Ubiquitous): Per-line change indicators (added/changed/
+deleted) shall be shown as extmark gutter signs.
+
+**REQ-RND-0007** (Ubiquitous): The file panel shall list changed files with
+a status marker (M/A/D) and a per-file comment-count indicator, and support
+`j`/`k`/`<CR>` navigation that re-renders the two diff buffers for the
+selected file.
+
+**REQ-RND-0008** (Ubiquitous): The two diff windows shall keep their scroll
+and cursor positions synchronized.
+
+**REQ-RND-0009** (Event-driven): When the user moves the cursor in a diff
+buffer and adds a comment, the system shall resolve the cursor row to
+`{path, side, lineno}` via the renderer's row→line mapping.
+
 ## 7. Verification Matrix
 
 | Requirement   | Test ID       | Method   | Description |
 |---------------|---------------|----------|-------------|
-| REQ-DIF-0001  | TST-DIF-0001  | Manual   | Open plugin, verify diffview layout matches SCR-DIFF-01 |
+| REQ-DIF-0001  | TST-DIF-0001  | Manual   | Open plugin, verify the built-in side-by-side layout matches SCR-DIFF-01 |
 | REQ-DIF-0002  | TST-DIF-0002  | Auto     | Invoke with no args, verify diff command targets HEAD |
 | REQ-DIF-0003  | TST-DIF-0003  | Auto     | Invoke with single rev, verify diff targets parent |
 | REQ-DIF-0004  | TST-DIF-0004  | Auto     | Invoke with two-dot range, verify diff targets A..B |
@@ -1159,15 +1036,13 @@ not on disk to begin with), unlike for diff buffers.
 | REQ-ERR-0002  | TST-ERR-0002  | Auto     | Remove git from PATH, invoke, verify exit code 1 |
 | REQ-ERR-0003  | TST-ERR-0003  | Auto     | Invoke outside git repo, verify exit code 1 |
 | REQ-ERR-0004  | TST-ERR-0004  | Auto     | Make audit trail directory unwritable, verify exit code 1 and diagnostic to stderr |
-| REQ-ERR-0005  | TST-ERR-0005  | Auto     | Remove diffview.nvim from runtimepath, invoke, verify exit code 1 and diagnostic naming diffview |
 | REQ-ERR-0006  | TST-ERR-0006  | Auto     | Mock `vim.version()` to return 0.9, verify exit code 1 and version diagnostic |
 | REQ-ERR-0007  | TST-ERR-0007  | Auto     | Invoke with nonexistent branch name, verify exit code 1 and diagnostic naming the revision |
 | REQ-ERR-0008  | TST-ERR-0008  | Auto     | Invoke with stdin redirected from /dev/null, verify exit code 1 |
-| REQ-ERR-0009  | TST-ERR-0009  | Auto     | Mock `diffview.lib` to omit `get_current_view`, verify exit code 1 and diagnostic naming diffview API |
-| REQ-SES-0001  | TST-SES-0001  | Manual   | Execute `:CodeReviewPause`, verify session file created in sessions directory and diffview UI closed |
+| REQ-SES-0001  | TST-SES-0001  | Manual   | Execute `:CodeReviewPause`, verify session file created in sessions directory and the diff view closed |
 | REQ-SES-0002  | TST-SES-0002  | Manual   | Execute `:CodeReviewSessions`, verify floating window lists saved sessions with range, count, and date |
 | REQ-SES-0003  | TST-SES-0003  | Auto     | Pause a session, read the session JSON, verify it contains comments, diff range, and timestamps |
-| REQ-SES-0004  | TST-SES-0004  | Manual   | Pause a session with comments, resume from session list, verify diffview reopens with all comments restored |
+| REQ-SES-0004  | TST-SES-0004  | Manual   | Pause a session with comments, resume from session list, verify the diff view reopens with all comments restored |
 | REQ-SES-0005  | TST-SES-0005  | Auto     | Resume a paused session and submit, verify the session file is deleted from the sessions directory |
 | REQ-SES-0006  | TST-SES-0006  | Manual   | Pause two sessions, run `:CodeReviewSessions`, verify selection picker shows both with id-prefix, range, count, and timestamp; select one, verify it resumes |
 | REQ-CLI-0006  | TST-CLI-0006  | Auto     | In interactive mode, start review and run `:CodeReviewCancel`, verify nvim stays running and a notification is shown; in agent mode, verify exit code 2 |
@@ -1176,14 +1051,18 @@ not on disk to begin with), unlike for diff buffers.
 | REQ-UIX-0008  | TST-UIX-0008  | Auto     | Verify `vim.api.nvim_buf_get_keymap()` on a diff buffer contains the documented default keys (`<leader>Rc`, `<leader>Rs`, etc.) |
 | REQ-UIX-0009  | TST-UIX-0009  | Auto     | Trigger `:CodeReviewSubmit`, capture the summary float content, verify it includes the markdown preamble from section 4.7 |
 | REQ-UIX-0010  | TST-UIX-0010  | Auto     | Call `setup({ keymaps = { add_comment = false, delete_comment = false } })`, start a review, verify those keys are not bound on diff buffers while other defaults are |
-| REQ-UIX-0011  | TST-UIX-0011  | Auto     | Programmatically swap a diff window's buffer to an unrelated buffer via `nvim_win_set_buf`; assert `:messages` contains the recovery hint string |
-| REQ-UIX-0012  | TST-UIX-0012  | Auto     | Run `:CodeReviewRefresh`; assert no error and both diff buffers are still populated and non-modifiable |
-| REQ-UIX-0013  | TST-UIX-0013  | Auto     | Navigate via diffview's panel from file 1 to file 2 (legitimate buffer swap); assert no desync hint appears in `:messages` |
-| REQ-UIX-0014  | TST-UIX-0014  | Auto     | Force desync, wait for the deferred check, assert the affected window still holds the stray buffer (no auto-refresh) |
-| REQ-UIX-0015  | TST-UIX-0015  | Auto     | Launch with `setup({ keymaps = { refresh = "<leader>Rx" } })`; assert `<leader>Rx` is bound on diff buffers and `<leader>RR` is not |
-| REQ-LSP-0001  | TST-LSP-0001  | Auto     | Start a review in a repo whose diff contains a `.md` file, verify no LSPs are attached to the diff buffers (covered by `test_13_diff_buffers_no_lsp.sh`) |
+| REQ-RND-0001  | TST-RND-0001  | Auto     | Compute a line diff via the renderer, verify `vim.diff()` is called with `result_type="indices"`, `algorithm="histogram"`, `linematch=60`, `indent_heuristic=true` |
+| REQ-RND-0002  | TST-RND-0002  | Auto     | Render a changed hunk with a single edited line, verify word-level intra-line highlights are placed on the differing tokens |
+| REQ-RND-0003  | TST-RND-0003  | Auto     | Render a diff buffer for a known filetype, verify treesitter is active (`vim.treesitter.start` ran and the tree is non-empty) on the loaded buffer |
+| REQ-RND-0004  | TST-RND-0004  | Manual   | Render a diff with unbalanced add/delete counts, verify filler rows keep corresponding lines on the same screen row |
+| REQ-RND-0005  | TST-RND-0005  | Auto     | Render a diff buffer, verify `buftype=nofile`, `buflisted=false`, `bufhidden=wipe`, `modifiable=false`, and window `winfixbuf=true` |
+| REQ-RND-0006  | TST-RND-0006  | Auto     | Render a diff with added/changed/deleted lines, verify gutter sign extmarks are present on the corresponding rows |
+| REQ-RND-0007  | TST-RND-0007  | Manual   | Open the file panel, verify each file shows an M/A/D marker and comment-count; press `<CR>` on a file, verify the two diff buffers re-render for it |
+| REQ-RND-0008  | TST-RND-0008  | Manual   | Scroll and move the cursor in one diff window, verify the other window stays in sync |
+| REQ-RND-0009  | TST-RND-0009  | Auto     | Place the cursor on a known diff row and add a comment, verify the resolved `{path, side, lineno}` matches the row→line mapping |
 | REQ-LSP-0002  | TST-LSP-0002  | Auto     | Open the comment float and summary float, verify both have filetype `codereview` (covered by `test_12_float_filetype.sh`) |
 | REQ-LSP-0003  | TST-LSP-0003  | Auto     | Open the comment float, verify no LSPs are attached after the filetype is set |
+| REQ-RND-0005  | TST-LSP-0001  | Auto     | Start a review whose diff includes a `.md` file; assert no LSP client is attached to either diff buffer (consequence of `buftype=nofile`) |
 
 ## 8. Acceptance Criteria
 
@@ -1253,10 +1132,10 @@ Each scenario must pass without modification to the test steps.
 **AC-E2E-08: Session pause and resume**
 
 1. Start a review, add two comments, and execute `:CodeReviewPause`.
-2. Verify: diffview closes, Neovim remains open, a session file exists in
+2. Verify: the diff view closes, Neovim remains open, a session file exists in
    the sessions directory.
 3. Execute `:CodeReviewSessions`, select the saved session.
-4. Verify: diffview reopens with the same range, both comments are visible
+4. Verify: the diff view reopens with the same range, both comments are visible
    as extmarks.
 5. Submit the resumed session.
 6. Verify: the session file is deleted, a review file is created in the
@@ -1271,7 +1150,7 @@ All gates must pass before a version is tagged.
 | Unit tests | All automated tests in the verification matrix (TST-*) pass |
 | Manual tests | All manual tests in the verification matrix executed and recorded as pass |
 | Schema validation | `review.json` output validates against `schema/review.v1.json` for every end-to-end scenario |
-| Dependency check | Plugin loads and reports a clear error when diffview.nvim is absent, Neovim < 0.10, or git is missing |
+| Dependency check | Plugin loads and reports a clear error when Neovim < 0.10 or git is missing |
 | Portable reads | Review files are valid JSON parseable without the plugin by any JSON parser |
 | No data loss | Comments entered in the UI appear in the persisted JSON without truncation or encoding errors |
 | Exit code contract | Exit codes match section 5.2 for all three paths (submit, cancel, error) |
