@@ -14,17 +14,10 @@ README is enough.
   versions will fail at startup.
 - git >= 2.30. Check with `git --version`. Older versions may work but
   are untested.
-- [diffview.nvim](https://github.com/dlyongemallo/diffview.nvim).
-  The `dlyongemallo` repo is the actively maintained fork; the
-  original `sindrets/diffview.nvim` also works. If you already have
-  either one installed, you are done with this line.
 
-The plugin relies on `require("diffview.lib").get_current_view()` and
-the `User` autocmd events `DiffviewDiffBufRead`,
-`DiffviewDiffBufWinEnter`, and `DiffviewViewClosed`. Both forks expose
-these today. If a future fork drops one, `:checkhealth code-review`
-catches the API surface; the autocmd events fail silently (no keymaps
-register, no extmarks render).
+The plugin has no plugin dependencies. The side-by-side diff is
+rendered in-plugin, in pure Lua on top of `vim.diff`, so there is
+nothing else to install.
 
 ## Concepts
 
@@ -37,20 +30,39 @@ A few terms are used throughout this guide:
 - A review session begins when you run `:CodeReview` and ends when you
   submit (`<leader>Rs`), cancel (`<leader>Rq`), or pause
   (`<leader>Rp`). While a session is active, the plugin's keymaps are
-  bound on diffview's buffers and the session-only commands
+  bound on the renderer's buffers and the session-only commands
   (`:CodeReviewSubmit`, `:CodeReviewCancel`, `:CodeReviewPause`,
   `:CodeReviewCopy`) are available.
 - The plugin has two modes. Interactive mode is when you launch Neovim
-  yourself and run `:CodeReview`; on submit, diffview closes and you
+  yourself and run `:CodeReview`; on submit, the review closes and you
   are returned to your editor. Agent mode is when an LLM coding agent
   launches Neovim non-interactively with `$NVIM_CODE_REVIEW_RESULT`
   set; on submit, Neovim exits and the agent reads the result file.
   The Claude Code integration doc covers agent mode in depth.
-- Diffview opens two kinds of buffers: diff buffers showing the
+- The renderer opens two kinds of buffers: diff buffers showing the
   before/after of a single file side-by-side, and a file-panel buffer
   listing every changed file in the review. The plugin's keymaps bind
   on both, so you can comment on a line from a diff buffer or comment
   on a whole file from the panel.
+
+## How the renderer is built
+
+When you run `:CodeReview`, the renderer creates two scratch diff
+buffers per file, named `code-review://old/<path>` and
+`code-review://new/<path>`, plus a file panel with filetype
+`codereview-panel`. The diff buffers are `buftype=nofile`,
+`buflisted=false`, `bufhidden=wipe`, and `modifiable=false` after they
+fill. Both diff windows set `winfixbuf=true`, which structurally blocks
+swapping another buffer into a diff window, plus `scrollbind` and
+`cursorbind` so the two sides stay aligned.
+
+Because the diff buffers are `nofile`, no LSP attaches to them. Nothing
+files diagnostics against the transient git blobs, and there is no
+cleanup to do.
+
+The renderer applies the plugin's buffer-local keymaps to the diff
+buffers and the file panel at the moment it builds them, during
+`:CodeReview`. There are no autocmds in the loop.
 
 ## Install
 
@@ -69,7 +81,6 @@ all (the simplest option if you just want to try the plugin).
 ```lua
 {
   "jhoskin/neovim-code-review",
-  dependencies = { "dlyongemallo/diffview.nvim" },
   cmd = { "CodeReview", "CodeReviewSessions" },
   main = "code-review",
   opts = {},
@@ -126,7 +137,6 @@ one.
 ```lua
 use {
   "jhoskin/neovim-code-review",
-  requires = { "dlyongemallo/diffview.nvim" },
   config = function()
     require("code-review").setup({})
   end,
@@ -143,8 +153,6 @@ creates the directories for you.
 ```bash
 git clone https://github.com/jhoskin/neovim-code-review.git \
   ~/.local/share/nvim/site/pack/plugins/start/neovim-code-review
-git clone https://github.com/dlyongemallo/diffview.nvim.git \
-  ~/.local/share/nvim/site/pack/plugins/start/diffview.nvim
 ```
 
 Then add the setup call to your config. If your config is `init.lua`,
@@ -171,24 +179,23 @@ After install, verify everything wired up correctly:
 You should see green checks for:
 
 - `Neovim >= 0.10`
-- `git available`
-- `Inside git repo` (you are inside a git working tree)
-- `diffview.nvim loaded`
-- `diffview.nvim API compatible`
-- `Audit trail directory` is writable
+- `git available` (reports the git version)
+- `Inside git repo` (reports the git root)
+- `Audit trail directory` (exists, was created, or could not be
+  created)
 
 The "Inside git repo" check downgrades to a warning if you ran
 `:checkhealth` outside a git work tree, which is expected; the other
 checks should all be green. If any line is yellow or red, the
-diagnostic text names the missing dependency, unwritable path, or
-incompatible API. Search this page for the named symbol: most failures
-have a Troubleshooting entry below.
+diagnostic text names the missing dependency or unwritable path. Search
+this page for the named symbol: most failures have a Troubleshooting
+entry below.
 
 ## Try it
 
 1. `cd` into any git repository with at least one uncommitted change.
-2. Run `nvim` and then `:CodeReview`. Diffview opens with the
-   working-tree changes.
+2. Run `nvim` and then `:CodeReview`. The review opens with the
+   working-tree changes side-by-side.
 3. Put your cursor on a changed line. Press `<leader>Rc`. A floating
    window prompts for a comment. Type, then press `<C-s>` to confirm.
 4. Press `<leader>Rs` to preview the review and submit it. The plugin
@@ -205,7 +212,7 @@ scannable form, but the values come from here.
 
 ```lua
 require("code-review").setup({
-  -- Buffer-local keymaps set on diffview's diff and file-panel
+  -- Buffer-local keymaps set on the renderer's diff and file-panel
   -- buffers during a review session.
   keymaps = {
     add_comment     = "<leader>Rc",  -- line comment at cursor
@@ -278,8 +285,8 @@ ASCII / Unicode marker. The same applies to `sign_text` (default `●`)
 if you set `ambiwidth=double`.
 
 Once a review session is active, the buffer-local keymaps register on
-diffview's diff and file-panel buffers. They carry `desc` strings, so
-which-key shows them under the `<leader>R` group as soon as you hit
+the renderer's diff and file-panel buffers. They carry `desc` strings,
+so which-key shows them under the `<leader>R` group as soon as you hit
 `<leader>R` on a session buffer.
 
 | Key          | Action                                  | Diff buffers | File panel |
@@ -341,7 +348,7 @@ opts = {
 ```
 
 For the launch commands, group them under `<leader>g` so they live
-next to diffview's git mappings. Drop this in
+next to your other git mappings. Drop this in
 `~/.config/nvim/lua/plugins/code-review.lua` (or merge into your
 existing git plugin file):
 
@@ -349,7 +356,6 @@ existing git plugin file):
 return {
   {
     "jhoskin/neovim-code-review",
-    dependencies = { "dlyongemallo/diffview.nvim" }, -- pulled in if not already in your spec
     cmd = { "CodeReview", "CodeReviewSessions" },
     keys = {
       { "<leader>gr", "<cmd>CodeReview<cr>",         desc = "Code review: working tree" },
@@ -360,12 +366,6 @@ return {
   },
 }
 ```
-
-The `dependencies` line declares the dep to lazy.nvim but does not
-configure it. `diffview.nvim` works out of the box with its own
-defaults; if you already have a diffview spec elsewhere that calls
-`require("diffview").setup({...})`, lazy merges the two specs and
-yours wins.
 
 Register `<leader>R` with which-key so the prefix shows a "review"
 label in the popup once a session is active:
@@ -502,61 +502,14 @@ Your plugin manager has not loaded code-review yet.
   `~/.local/share/nvim/site/pack/plugins/start/neovim-code-review`
   and restart Neovim.
 
-#### The diff shows the wrong files (left and right don't match) after using a file picker
+#### Opening a file into a diff pane errors out
 
-If you open a file via Telescope, snacks-picker, fzf-lua, or
-`<leader>ff` while a review session is active, the picker opens that
-file in whatever window is currently focused — including diffview's
-left or right pane. Diffview's diff state then gets out of sync: one
-pane shows the original review file, the other shows the file you
-just picked.
-
-This is a footgun in the interaction model between diffview and
-external pickers, not a bug in the plugin. Two workarounds:
-
-- **Recommended**: navigate files using diffview's own file panel
-  (`<leader>e` toggles it, then `j`/`k` and `<CR>`). This keeps both
-  panes pointing at the same file's old and new versions.
-- **Recovery**: if you do desync the diff, run `:DiffviewRefresh` to
-  rebuild it. If that fails, cancel the review (`<leader>Rq`) and
-  start over.
-
-We tried locking the diff windows with `winfixbuf` so pickers would
-error out instead of corrupting the state, but diffview's own setup
-races with the lock and breaks. If you find a clean way to make this
-work, file an issue.
-
-#### `:CodeReview` opens but diffview never appears
-
-The plugin loaded but diffview did not. Run `:Lazy` and check that
-`diffview.nvim` is in the "Loaded" section (not "Not loaded"). If it
-is not, either:
-
-- You omitted `dependencies = { "dlyongemallo/diffview.nvim" }` from
-  the lazy.nvim spec. Add it and run `:Lazy sync`.
-- diffview's own `cmd =` lazy spec is blocking it from loading
-  transitively. Force-load with `:Lazy load diffview.nvim` to confirm,
-  then either drop the `cmd =` on diffview or set `lazy = false` on
-  it.
-
-Then verify you are inside a git repository:
-`:!git rev-parse --show-toplevel`. If git answers
-`fatal: not a git repository`, run `:cd <repo>` first or open Neovim
-from inside the repo.
-
-#### `:CodeReview` errors with `attempt to call field 'get_current_view' (a nil value)`
-
-Your installed diffview.nvim is too old or is the wrong fork. The
-plugin requires `diffview.lib.get_current_view()`, which lives in the
-active `dlyongemallo/diffview.nvim` fork and in recent versions of the
-upstream `sindrets/diffview.nvim`.
-
-1. Run `:checkhealth code-review`. The "diffview.nvim API compatible"
-   line names the missing symbol.
-2. Update the plugin: `:Lazy update diffview.nvim` (lazy.nvim) or
-   `:PackerSync` (packer).
-3. If you pinned `sindrets/diffview.nvim` at an old tag, either unpin
-   it or switch to `dlyongemallo/diffview.nvim`.
+The diff windows set `winfixbuf=true`, so opening a file into one of
+them (via Telescope, snacks-picker, fzf-lua, or `<leader>ff` while a
+review session is active) errors instead of swapping the buffer. This
+is deliberate: it keeps the two diff panes pointing at the same file's
+old and new versions. Navigate files with the renderer's own file
+panel: `j`/`k` to move and `<CR>` to open.
 
 #### `:CodeReview <range>` errors with `fatal: ambiguous argument '<rev>': unknown revision or path not in the working tree`
 
@@ -571,63 +524,24 @@ Git could not resolve the revision you passed. Common causes:
 - You passed a path instead of a revision; quote ranges that contain
   `..` to avoid shell expansion.
 
-#### `<leader>Rc` has no effect in a diffview buffer (`E329: No buffer-local mapping`)
+#### `<leader>Rc` has no effect in a diff buffer
 
-The plugin only binds its keymaps when you launch the review with
-`:CodeReview`. If you opened diffview yourself with `:DiffviewOpen`,
-you get diffview without the review keymaps; that is intentional.
-Close diffview and run `:CodeReview` instead.
+The plugin binds its keymaps when you launch the review with
+`:CodeReview`; the renderer applies them to the diff buffers and the
+file panel as it builds them. If a key has no effect, confirm you are
+in a buffer the renderer created and that `setup()` ran.
 
-Details: the maps are buffer-local and register on diffview's
-`DiffviewDiffBufRead` (the first time each diff buffer is read) and
-`DiffviewDiffBufWinEnter` (every subsequent re-entry, so navigating
-away with `<C-w>w` and back keeps the bindings live). If you opened
-diffview directly, the autocmd group `code_review_session` is never
-created, so the keymaps will not be there.
-
-#### `:checkhealth code-review` is all green but signs/keymaps are missing from the diff tab
-
-The plugin loaded and the dependencies are healthy, but the
-`User DiffviewDiffBufRead` autocmd did not fire on your buffer. Walk
-down this ladder:
-
-1. Confirm diffview fired the event:
-   `:autocmd User DiffviewDiffBufRead`. code-review's callback should
-   appear in the list. If it does not, the plugin's `setup()` was
-   never called. Check that your `opts = {}` / `config = function()
-   require("code-review").setup({}) end` block ran (lazy.nvim's
-   `cmd =` lazy spec delays this until first `:CodeReview`).
-2. Confirm the keymap is bound on the buffer:
+1. Confirm the keymap is bound on the buffer:
    `:verbose nmap <leader>Rc`. The output should name a buffer-local
    mapping defined in `lua/code-review/init.lua`.
-3. Confirm you opened diffview via `:CodeReview` (not `:DiffviewOpen`
-   directly). The plugin only attaches to diffview tabs it spawned.
-
-#### LSP exits with code 0 in `:messages`
-
-Expected. The plugin gracefully stops markdown LSP clients (Marksman,
-ltex-ls, prosemd) that attach to diff buffers so they do not file
-diagnostics against transient git blobs. See REQ-LSP-0001 in
-`spec.md`. A clean exit code 0 means the shutdown handshake succeeded;
-no action needed.
-
-#### LSP crashes with non-zero exit or `signal SIGTERM`
-
-This is a bug. The mitigation is two-pronged: on
-`DiffviewDiffBufRead`, the plugin stops every client already attached
-to the diff buffer and registers a buffer-local `LspAttach` autocmd
-that stops any future attachment. A residual crash means the LSP
-completed `textDocument/didOpen` against the synthetic
-`diffview:///…` URI before the stop call ran.
-
-1. Open the LSP log: `:LspLog` (if you have nvim-lspconfig) or
-   `:e <C-r>=v:lua.vim.lsp.get_log_path()<CR>`.
-2. Identify the server name from the log.
-3. File a bug at <https://github.com/jhoskin/neovim-code-review/issues>
-   with the log excerpt, the LSP client name, and the exact
-   `:CodeReview` command you used. See
-   [Filing a bug report](#filing-a-bug-report) for the full intake
-   template.
+2. Confirm `setup()` ran. With lazy.nvim's `cmd =` lazy spec, this is
+   delayed until the first `:CodeReview`. Check that your `opts = {}` /
+   `config = function() require("code-review").setup({}) end` block is
+   present.
+3. Confirm you are inside a git repository:
+   `:!git rev-parse --show-toplevel`. If git answers
+   `fatal: not a git repository`, run `:cd <repo>` first or open Neovim
+   from inside the repo.
 
 #### `:CodeReviewSubmit` errors with `E482: Can't create file ...` or `mkdir() failed: Permission denied`
 
@@ -649,8 +563,9 @@ writable, submit fails with the OS error above.
 #### Submit shows `E37: No write since last change` or a `Save changes to ...?` prompt
 
 This should not happen. The plugin uses `:quitall!` in agent mode and
-`DiffviewClose` in interactive mode (see `lua/code-review/review.lua`
-and `lua/code-review/init.lua`). If you hit a save prompt:
+closes the renderer in interactive mode (see
+`lua/code-review/review.lua` and `lua/code-review/init.lua`). If you
+hit a save prompt:
 
 1. Press `:q!` to discard and avoid corrupting the audit trail.
 2. Capture `:messages` (last 50 lines).
@@ -666,13 +581,10 @@ at <https://github.com/jhoskin/neovim-code-review/issues> with:
 - `nvim --version` output
 - Plugin commit: `:Lazy log code-review` (or
   `git -C ~/.local/share/nvim/site/pack/.../neovim-code-review log -1`)
-- diffview commit and fork (dlyongemallo or sindrets)
 - OS and shell
 - Output of `:checkhealth code-review`
 - Relevant `:messages` excerpt (last 50 lines: run `:messages`, then
   yank with `"+y`)
-- LSP log excerpt for LSP crashes: open with
-  `:e <C-r>=v:lua.vim.lsp.get_log_path()<CR>`
 - Minimal repro: the exact `:CodeReview <range>` invocation and, if
   possible, a public repo or commit hash that triggers it
 

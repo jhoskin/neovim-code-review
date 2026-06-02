@@ -16,15 +16,21 @@ wait_for "$SESSION" "greeting.txt" 5
 sleep 2
 
 cat > /tmp/cr-readonly-check.lua <<'EOF'
-local lib = require('diffview.lib')
-local view = lib.get_current_view()
-local a_buf = view.cur_layout.a.file.bufnr
-local b_buf = view.cur_layout.b.file.bufnr
+local function diff_bufs()
+  local a, b
+  for _, buf in ipairs(vim.api.nvim_list_bufs()) do
+    local nm = vim.api.nvim_buf_get_name(buf)
+    if nm:find('code-review://old/', 1, true) then a = buf end
+    if nm:find('code-review://new/', 1, true) then b = buf end
+  end
+  return a, b
+end
+local a_buf, b_buf = diff_bufs()
 local lines = {
   'a_bufnr=' .. tostring(a_buf),
-  'a_modifiable=' .. tostring(vim.bo[a_buf].modifiable),
+  'a_modifiable=' .. tostring(a_buf and vim.bo[a_buf].modifiable),
   'b_bufnr=' .. tostring(b_buf),
-  'b_modifiable=' .. tostring(vim.bo[b_buf].modifiable),
+  'b_modifiable=' .. tostring(b_buf and vim.bo[b_buf].modifiable),
 }
 vim.fn.writefile(lines, '/tmp/cr-readonly-check.txt')
 EOF

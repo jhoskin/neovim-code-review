@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Test 01: :CodeReview opens diffview
+# Test 01: :CodeReview opens the side-by-side renderer
 # Covers: TST-DIF-0001, TST-CLI-0001
 set -euo pipefail
 source "$(dirname "$0")/lib.sh"
@@ -13,8 +13,8 @@ echo "Test repo: $repo"
 start_nvim "$SESSION" "$repo"
 send_cmd "$SESSION" "CodeReview"
 
-# Diffview should open showing the working tree changes
+# The renderer's file panel lists the working-tree changes (greeting.txt).
 wait_for "$SESSION" "greeting.txt" 5
 assert_session_alive "$SESSION"
 
-echo "PASS: :CodeReview opened diffview"
+echo "PASS: :CodeReview opened the renderer"

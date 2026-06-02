@@ -3,15 +3,18 @@
 Local code review for LLM coding agent output. No GitHub, no third-party
 services.
 
-A coding agent launches Neovim into a diff view. You add comments on diff
-lines or files. On exit, the review is persisted as a JSON file and the
+A coding agent launches Neovim into a side-by-side diff. You add comments on
+diff lines or files. On exit, the review is persisted as a JSON file and the
 agent reads it to act on your feedback.
+
+The diff is rendered in-plugin (pure Lua on top of `vim.diff`), so there are
+no plugin dependencies.
 
 ## How it works
 
 1. Agent runs `nvim -c 'CodeReview HEAD~3..HEAD'` with
    `$NVIM_CODE_REVIEW_RESULT` set to a temp file path.
-2. Neovim opens with a diffview of the changes.
+2. Neovim opens a side-by-side diff of the changes.
 3. You add line and file comments using `<leader>R*` keymaps.
 4. You submit with `<leader>Rs`, confirming the markdown preview.
 5. The plugin writes a JSON file under
@@ -24,7 +27,6 @@ agent reads it to act on your feedback.
 ```lua
 {
   "jhoskin/neovim-code-review",
-  dependencies = { "dlyongemallo/diffview.nvim" },
   cmd = { "CodeReview", "CodeReviewSessions" },
   config = function()
     require("code-review").setup({})
@@ -93,8 +95,10 @@ Claude Code slash command example.
 ## Dependencies
 
 - Neovim >= 0.10
-- [diffview.nvim](https://github.com/dlyongemallo/diffview.nvim)
 - git >= 2.30
+
+No plugin dependencies. The diff renderer is built in (pure Lua +
+`vim.diff`).
 
 ## Bundled scripts
 
