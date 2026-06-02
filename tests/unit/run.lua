@@ -38,6 +38,20 @@ end
 local spec_dir = root .. "/tests/unit"
 local specs = find_specs(spec_dir)
 
+-- Optional filter: `nvim --headless -l tests/unit/run.lua <substring>` runs
+-- only spec files whose path contains <substring>. Lets parallel builders
+-- run just their own spec without picking up siblings' in-progress files.
+local filter = arg and arg[1]
+if filter and filter ~= "" then
+  local kept = {}
+  for _, s in ipairs(specs) do
+    if s:find(filter, 1, true) then
+      kept[#kept + 1] = s
+    end
+  end
+  specs = kept
+end
+
 for _, spec in ipairs(specs) do
   local rel = spec:sub(#root + 2)
   print("\n" .. rel)
