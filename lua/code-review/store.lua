@@ -124,13 +124,26 @@ end
 
 function Store:comment_count()
   local count = 0
-  for _, file in pairs(self.files) do
-    if file.comment then
-      count = count + 1
-    end
-    for _ in pairs(file.lines) do
-      count = count + 1
-    end
+  for path in pairs(self.files) do
+    count = count + self:count_for(path)
+  end
+  return count
+end
+
+-- Number of comments (file-level plus line-level) anchored to one path. The
+-- panel's per-file count marker calls this; comment_count() is the whole-store
+-- total over every path.
+function Store:count_for(path)
+  local file = self.files[path]
+  if not file then
+    return 0
+  end
+  local count = 0
+  if file.comment then
+    count = count + 1
+  end
+  for _ in pairs(file.lines) do
+    count = count + 1
   end
   return count
 end
