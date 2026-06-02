@@ -6,7 +6,6 @@ function M.parse_range(range_str)
       type = "working_tree",
       base = nil,
       head = nil,
-      diffview_args = "",
     }
   end
 
@@ -16,7 +15,6 @@ function M.parse_range(range_str)
       type = "branch",
       base = a,
       head = b,
-      diffview_args = a .. "..." .. b,
     }
   end
 
@@ -26,7 +24,6 @@ function M.parse_range(range_str)
       type = "commit_range",
       base = a,
       head = b,
-      diffview_args = a .. ".." .. b,
     }
   end
 
@@ -34,7 +31,6 @@ function M.parse_range(range_str)
     type = "commit_range",
     base = range_str .. "^",
     head = range_str,
-    diffview_args = range_str .. "^.." .. range_str,
   }
 end
 
@@ -76,91 +72,140 @@ function M.resolve_shas(parsed)
   return parsed
 end
 
-function M.open(parsed)
-  if parsed.diffview_args == "" then
-    vim.cmd("DiffviewOpen")
+-- Run git and return raw stdout (untrimmed) plus a success flag. Used where
+-- exact byte content matters (file_contents), unlike M._git which trims.
+function M._git_raw(args)
+  local cmd = { "git" }
+  for _, arg in ipairs(args) do
+    table.insert(cmd, arg)
+  end
+  local result = vim.system(cmd, { text = true }):wait()
+  if result.code ~= 0 then
+    return nil
+  end
+  return result.stdout or ""
+end
+
+-- Split a string into lines, dropping the single trailing newline a file/blob
+-- carries. "" -> {}; "a\nb\n" -> {"a","b"}; "a\nb" -> {"a","b"}.
+local function split_lines(s)
+  if s == "" then
+    return {}
+  end
+  -- Drop exactly one trailing newline (POSIX final-newline), not blank lines.
+  if s:sub(-1) == "\n" then
+    s = s:sub(1, -2)
+  end
+  local lines = {}
+  local start = 1
+  while true do
+    local nl = s:find("\n", start, true)
+    if not nl then
+      lines[#lines + 1] = s:sub(start)
+      break
+    end
+    lines[#lines + 1] = s:sub(start, nl - 1)
+    start = nl + 1
+  end
+  return lines
+end
+
+-- Map a git --name-status letter to the renderer's M/A/D vocabulary.
+-- R (rename) and C (copy) are treated as M on the new path.
+local function map_status(letter)
+  if letter == "A" then
+    return "A"
+  elseif letter == "D" then
+    return "D"
   else
-    vim.cmd("DiffviewOpen " .. parsed.diffview_args)
+    -- M, R, C, T, U → modified on the resolved path
+    return "M"
   end
 end
 
-function M.get_diff_hunk(file_path, lineno, side, parsed)
-  local args = { "diff", "--unified=3", "--no-color" }
-  if parsed.type == "working_tree" then
-    table.insert(args, "HEAD")
-  else
-    table.insert(args, (parsed.base_sha or parsed.base))
-    if parsed.head_sha or parsed.head then
-      table.insert(args, (parsed.head_sha or parsed.head))
+-- changed_files(diff_info) -> FileEntry[]  where FileEntry = { path, status }.
+-- working_tree: `git diff --name-status HEAD` plus untracked files (status A).
+-- commit_range/branch: `git diff --name-status <base_sha> <head_sha>`.
+function M.changed_files(diff_info)
+  local entries = {}
+  local seen = {}
+
+  local function add(path, status)
+    if not seen[path] then
+      seen[path] = true
+      entries[#entries + 1] = { path = path, status = status }
     end
   end
-  table.insert(args, "--")
-  table.insert(args, file_path)
 
-  local diff_output = M._git(args)
-  if not diff_output then
-    return ""
+  local out
+  if diff_info.type == "working_tree" then
+    out = M._git_raw({ "diff", "--name-status", "HEAD" })
+  else
+    out = M._git_raw({ "diff", "--name-status", diff_info.base_sha, diff_info.head_sha })
   end
 
-  return M._extract_hunk(diff_output, lineno, side)
-end
-
-function M._extract_hunk(diff_text, target_line, side)
-  local current_hunk_lines = {}
-  local in_hunk = false
-  local old_line, new_line
-
-  for line in diff_text:gmatch("[^\n]+") do
-    local old_start, old_count, new_start, new_count = line:match("^@@ %-(%d+),?(%d*) %+(%d+),?(%d*) @@")
-    if old_start then
-      if in_hunk and M._hunk_contains(current_hunk_lines, target_line, side) then
-        return table.concat(current_hunk_lines, "\n")
+  for _, line in ipairs(split_lines(out or "")) do
+    if line ~= "" then
+      -- Fields are tab-separated: STATUS\tPATH  (rename: R100\tOLD\tNEW).
+      local fields = vim.split(line, "\t", { plain = true })
+      local letter = fields[1]:sub(1, 1)
+      local path
+      if letter == "R" or letter == "C" then
+        path = fields[3] or fields[2]
+      else
+        path = fields[2]
       end
-      current_hunk_lines = { line }
-      in_hunk = true
-      old_line = tonumber(old_start)
-      new_line = tonumber(new_start)
-    elseif in_hunk then
-      table.insert(current_hunk_lines, line)
-      local prefix = line:sub(1, 1)
-      if prefix == " " then
-        old_line = old_line + 1
-        new_line = new_line + 1
-      elseif prefix == "-" then
-        old_line = old_line + 1
-      elseif prefix == "+" then
-        new_line = new_line + 1
+      if path and path ~= "" then
+        add(path, map_status(letter))
       end
     end
   end
 
-  if in_hunk and M._hunk_contains(current_hunk_lines, target_line, side) then
-    return table.concat(current_hunk_lines, "\n")
+  if diff_info.type == "working_tree" then
+    local untracked = M._git_raw({ "ls-files", "--others", "--exclude-standard" })
+    for _, path in ipairs(split_lines(untracked or "")) do
+      if path ~= "" then
+        add(path, "A")
+      end
+    end
   end
 
-  return ""
+  return entries
 end
 
-function M._hunk_contains(hunk_lines, target_line, side)
-  if #hunk_lines == 0 then
-    return false
-  end
-  local header = hunk_lines[1]
-  local old_start, old_count, new_start, new_count = header:match("^@@ %-(%d+),?(%d*) %+(%d+),?(%d*) @@")
-  if not old_start then
-    return false
-  end
-
-  old_start = tonumber(old_start)
-  old_count = tonumber(old_count) or 1
-  new_start = tonumber(new_start)
-  new_count = tonumber(new_count) or 1
-
-  if side == "old" then
-    return target_line >= old_start and target_line < old_start + old_count
+-- file_contents(diff_info, path) -> old_lines, new_lines.
+-- old: `git show <base_sha>:<path>`, or {} if the file did not exist in base.
+-- new: working_tree reads the working-tree file; ranges use
+--      `git show <head_sha>:<path>`. {} if the file is absent on the new side.
+function M.file_contents(diff_info, path)
+  local old_lines
+  local base = diff_info.base_sha or diff_info.base
+  if base then
+    local old_out = M._git_raw({ "show", base .. ":" .. path })
+    old_lines = old_out and split_lines(old_out) or {}
   else
-    return target_line >= new_start and target_line < new_start + new_count
+    old_lines = {}
   end
+
+  local new_lines
+  if diff_info.type == "working_tree" then
+    local root = M.git_root()
+    local full = (root and (root .. "/" .. path)) or path
+    local fd = io.open(full, "r")
+    if fd then
+      local content = fd:read("*a") or ""
+      fd:close()
+      new_lines = split_lines(content)
+    else
+      new_lines = {}
+    end
+  else
+    local head = diff_info.head_sha or diff_info.head
+    local new_out = head and M._git_raw({ "show", head .. ":" .. path }) or nil
+    new_lines = new_out and split_lines(new_out) or {}
+  end
+
+  return old_lines, new_lines
 end
 
 function M.validate_range(range_str)
