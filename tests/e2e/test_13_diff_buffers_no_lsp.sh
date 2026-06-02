@@ -1,7 +1,9 @@
 #!/usr/bin/env bash
 # Test 13: diff buffers have no LSPs attached during a review
 # Covers: TST-LSP-0001
-# (prevents Marksman et al. from crashing when diffview closes the buffer)
+# The renderer's diff buffers are buftype=nofile, so no language server
+# attaches (no FileType event on a nofile scratch buffer). This is the
+# structural prevention that replaced diffview's post-hoc LSP stripping.
 set -euo pipefail
 source "$(dirname "$0")/lib.sh"
 
@@ -28,10 +30,19 @@ wait_for "$SESSION" "README.md" 5
 sleep 2
 
 cat > /tmp/cr-no-lsp-check.lua <<'EOF'
-local lib = require('diffview.lib')
-local view = lib.get_current_view()
-local a_buf = view.cur_layout.a.file.bufnr
-local b_buf = view.cur_layout.b.file.bufnr
+-- Drive to the markdown file (the case that would attract Marksman) so the
+-- diff buffers actually hold README.md content while we check for clients.
+pcall(function() require('code-review.render.init').switch_file('README.md') end)
+local function diff_bufs()
+  local a, b
+  for _, buf in ipairs(vim.api.nvim_list_bufs()) do
+    local nm = vim.api.nvim_buf_get_name(buf)
+    if nm:find('code-review://old/', 1, true) then a = buf end
+    if nm:find('code-review://new/', 1, true) then b = buf end
+  end
+  return a, b
+end
+local a_buf, b_buf = diff_bufs()
 local get_clients = vim.lsp.get_clients or vim.lsp.get_active_clients
 local a_count = #get_clients({ bufnr = a_buf })
 local b_count = #get_clients({ bufnr = b_buf })
