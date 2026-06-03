@@ -1,7 +1,9 @@
 #!/usr/bin/env bash
-# Test 37: the launcher's async interface. `start` returns a handle without
-# blocking; `status` reports running (exit 3); `wait` blocks until the review
-# ends and reports the outcome; finishing tidies up the tmux session + state.
+# Test 37: the launcher's async + durable interface. `start` returns a handle
+# without blocking; the review runs in a detached tmux session (the durable
+# supervisor) that is alive with NO client attached -- i.e. it survives a closed
+# tab; `status` reports running (exit 3); `wait` blocks until the review ends and
+# reports the outcome; finishing tidies up the session + state.
 # it2 is stubbed so no real iTerm tab opens during the test.
 set -uo pipefail
 source "$(dirname "$0")/lib.sh"
@@ -19,8 +21,8 @@ echo "Test repo: $repo"
 cd "$repo"
 
 cleanup() {
-  [ -n "${session:-}" ] && tmux kill-session -t "$session" 2>/dev/null || true
-  [ -n "${handle:-}" ] && rm -f "$handle" "$handle.done" "$handle.state" 2>/dev/null || true
+  [ -n "${sock:-}" ] && [ -n "${session:-}" ] && tmux -S "$sock" kill-session -t "$session" 2>/dev/null || true
+  [ -n "${handle:-}" ] && rm -f "$handle" "$handle.done" "$handle.state" "${sock:-/nonexistent}" 2>/dev/null || true
 }
 trap cleanup EXIT
 
@@ -34,12 +36,21 @@ fi
 echo "start returned a handle and state: PASS"
 
 session=$(sed -n 's/^session=//p' "$handle.state")
-sleep 2
-if ! tmux has-session -t "$session" 2>/dev/null; then
-  echo "FAIL: review tmux session '$session' not running after start"
+sock=$(sed -n 's/^sock=//p' "$handle.state")
+if [ -z "$sock" ]; then
+  echo "FAIL: state file has no explicit tmux socket"
   exit 1
 fi
-echo "review session running: PASS"
+sleep 2
+
+# Durable: the session is alive on its own socket with NO client attached. That
+# is exactly the state after a tab close, and it proves a closed tab does not
+# kill the review.
+if ! tmux -S "$sock" has-session -t "$session" 2>/dev/null; then
+  echo "FAIL: durable review session '$session' not alive on socket $sock"
+  exit 1
+fi
+echo "review session durable (alive with no client attached): PASS"
 
 # status while running -> exit 3.
 rc=0
@@ -50,9 +61,9 @@ if [ "$rc" != "3" ]; then
 fi
 echo "status reports running (exit 3): PASS"
 
-# Cancel the review; wait should report cancelled (exit 2).
-tmux send-keys -t "$session" Escape; sleep 0.3
-tmux send-keys -t "$session" ":CodeReviewCancel" Enter
+# Cancel from inside the durable session; wait should report cancelled (exit 2).
+tmux -S "$sock" send-keys -t "$session" Escape; sleep 0.3
+tmux -S "$sock" send-keys -t "$session" ":CodeReviewCancel" Enter
 rc=0
 timeout 20 "$LAUNCH" wait "$handle" >/dev/null 2>&1 || rc=$?
 if [ "$rc" != "2" ]; then
@@ -61,8 +72,8 @@ if [ "$rc" != "2" ]; then
 fi
 echo "wait reports cancelled (exit 2): PASS"
 
-# wait cleaned up: session gone, state file removed.
-if tmux has-session -t "$session" 2>/dev/null; then
+# Completion tidied up: session gone, state file removed.
+if tmux -S "$sock" has-session -t "$session" 2>/dev/null; then
   echo "FAIL: tmux session was not cleaned up after the review ended"
   exit 1
 fi
@@ -72,4 +83,4 @@ if [ -f "$handle.state" ]; then
 fi
 echo "completion tidied up the session + state: PASS"
 
-echo "PASS: async launcher start/status/wait lifecycle works"
+echo "PASS: async durable launcher start/status/wait lifecycle works"
