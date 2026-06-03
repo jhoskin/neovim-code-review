@@ -2,6 +2,8 @@
 -- These exercise real Neovim windows/buffers (like the Stage A spike); they
 -- do not require git, diff, or paint. Content is supplied through the view's
 -- content provider so the test fully controls the line arrays.
+-- Covers: TST-RND-0005 (nofile/buflisted/bufhidden/modifiable + winfixbuf
+--         buffer-and-window contract).
 
 local H = ...
 local describe, it = H.describe, H.it
@@ -151,6 +153,19 @@ describe("render/view layout", function()
     eq(v:current().path, "b.lua", "current() old side tracks the swapped file")
     vim.api.nvim_set_current_win(v.new_win)
     eq(v:current().path, "b.lua", "current() new side tracks the swapped file")
+    v:close()
+  end)
+
+  it("show_file resets the diff windows to the top of the new file", function()
+    -- Fix #11: after a file switch the diff windows return to line 1, so a
+    -- comment added right after a switch anchors to a visible row, not one
+    -- clamped down from the previous (longer) file.
+    local v = open_view("b.lua") -- 3 lines
+    vim.api.nvim_set_current_win(v.old_win)
+    vim.api.nvim_win_set_cursor(v.old_win, { 3, 0 })
+    v:show_file("a.lua") -- 2 lines
+    eq(vim.api.nvim_win_get_cursor(v.old_win)[1], 1, "old win reset to line 1")
+    eq(vim.api.nvim_win_get_cursor(v.new_win)[1], 1, "new win reset to line 1")
     v:close()
   end)
 

@@ -317,7 +317,16 @@ function M.cursor_context()
     return nil
   end
 
-  return { path = cur.path, side = cur.side, lineno = lineno }
+  -- Carry BOTH line numbers from the model row. For a context or modified row
+  -- both are set; the spec requires both populated for such comments (3.2 line
+  -- number invariants). `lineno` stays the anchor-side number (the store key).
+  return {
+    path = cur.path,
+    side = cur.side,
+    lineno = lineno,
+    old_lineno = row.old_lineno,
+    new_lineno = row.new_lineno,
+  }
 end
 
 return M

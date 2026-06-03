@@ -2,6 +2,11 @@ local diff = require("code-review.diff")
 
 local M = {}
 
+-- Set once a submit/cancel/error exit path has run, so the VimLeavePre safety
+-- net in init.lua does not double-cancel (e.g. turn a storage-error exit 1 into
+-- a cancel exit 2).
+M._exit_initiated = false
+
 function M.serialize(store, diff_info)
   local id = os.date("!%Y%m%dT%H%M%S")
   local created_at = os.date("!%Y-%m-%dT%H:%M:%SZ")
@@ -28,7 +33,10 @@ function M.save(review_data)
     return nil, "cannot determine audit trail directory"
   end
 
-  vim.fn.mkdir(dir, "p")
+  -- mkdir raises E739 when a parent is unwritable; catch it so an unwritable
+  -- audit dir becomes a clean storage error (exit 1) instead of a stack trace
+  -- (REQ-ERR-0004). io.open below is the real gate either way.
+  pcall(vim.fn.mkdir, dir, "p")
 
   local filename = review_data.id .. ".json"
   local filepath = dir .. "/" .. filename
@@ -55,6 +63,7 @@ function M.write_result(review_path)
 end
 
 function M.exit_submit(review_path)
+  M._exit_initiated = true
   local ok, err = M.write_result(review_path)
   if not ok then
     M.exit_error("storage_error", err)
@@ -66,10 +75,12 @@ function M.exit_submit(review_path)
 end
 
 function M.exit_cancel()
+  M._exit_initiated = true
   vim.cmd("cquit 2")
 end
 
 function M.exit_error(error_type, message)
+  M._exit_initiated = true
   io.stderr:write("code-review: " .. error_type .. ": " .. message .. "\n")
   vim.cmd("cquit 1")
 end

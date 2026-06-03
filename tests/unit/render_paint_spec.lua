@@ -1,5 +1,7 @@
 -- Unit + property tests for render/paint.lua.
 -- Invoked by tests/unit/run.lua, which passes the harness as the argument.
+-- Covers: TST-RND-0002 (intra-line word highlights), TST-RND-0006 (gutter signs),
+--         TST-RND-0003 (treesitter on the loaded scratch buffer).
 
 local H = ...
 local describe, it, property = H.describe, H.it, H.property

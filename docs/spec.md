@@ -521,10 +521,13 @@ view with the same range, restores all comments and extmarks.
 
 ### 4.9 Quit interception
 
-When the user executes `:q`, `:qa`, or `ZQ`, the plugin intercepts the quit
-via a `QuitPre` autocmd. If there are unsaved comments, the plugin shows the
-summary screen (SCR-SUMMARY-01) for confirmation. If the user cancels the
-summary and quits again, no review file is created and Neovim exits with code 2.
+When the user quits Neovim (`:qa`, `ZQ`, or `:q` on the last window) without
+having submitted, the plugin intercepts the exit via a `VimLeavePre` autocmd,
+lets the quit proceed, creates no review file, and in agent mode exits with
+code 2. `VimLeavePre` is used rather than `QuitPre` because `QuitPre` cannot
+distinguish a `:q` that closes one of several diff panes from a full quit; a
+`:q` that only closes a pane leaves the review running. The summary screen
+(SCR-SUMMARY-01) is shown by the submit keymap, not on quit.
 
 The plugin does not prevent quitting. A quit without submitting is treated as
 cancellation, not as an empty review.
@@ -852,8 +855,8 @@ whenever line 1 is in view, providing a discoverable indicator
 independent of scroll position.
 
 **REQ-UIX-0007** (Event-driven): When the user quits Neovim without submitting
-a review, the system shall intercept the quit via `QuitPre`, allow the quit to
-proceed, create no review file, and exit with code 2 (see section 4.9).
+a review, the system shall intercept the exit via `VimLeavePre`, allow the quit
+to proceed, create no review file, and exit with code 2 (see section 4.9).
 
 **REQ-UIX-0008** (Ubiquitous): Default keybindings shall use the `<leader>R`
 prefix (Review) to avoid collision with common LazyVim/which-key
