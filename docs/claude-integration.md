@@ -195,19 +195,31 @@ argument-hint: "[git-range]"
 allowed-tools: Bash, Read, Edit
 ---
 
-Hand control to the user for an interactive code review, then read the JSON they submit and apply their feedback.
+Hand control to the user for an interactive code review, then read the JSON they submit and apply their feedback. A review can take far longer than the Bash tool's 10-minute cap, so drive it asynchronously: start it, then wait in the background.
 
-Do not read other files first. Run the script below with `timeout: 600000`. The script polls for up to five hours, but Claude Code's Bash tool caps at ten minutes; if the user needs longer, they can pause the review (`<leader>Rp`), let this call time out, and resume with `:CodeReviewSessions` later.
+Do not read other files first.
+
+Step 1 — start the review. This returns immediately and prints a HANDLE on stdout (the iTerm tab opens for the user):
 
 ```bash
-~/.claude/scripts/interactive-review-launch "${ARGUMENTS:-}"
+~/.claude/scripts/interactive-review-launch start "${ARGUMENTS:-}"
 ```
 
-After the Bash returns, act based on the exit code:
+Capture the handle (the single stdout line). If `start` exits non-zero, print its stderr and stop.
+
+Step 2 — wait for the user to finish, in the background so it is not capped at 10 minutes. Run this with `run_in_background: true`, substituting the handle from step 1:
+
+```bash
+~/.claude/scripts/interactive-review-launch wait <HANDLE>
+```
+
+It polls every second and exits the moment the user submits or cancels; you are notified when it completes. (To peek without blocking, run `... status <HANDLE>` — exit code 3 means still running. Tell the user to take their time.)
+
+Step 3 — when the background `wait` completes, act on its exit code:
 
 - **0**: parse the printed JSON. Each `files[].lines[]` entry is a comment on `path` at `new_lineno` (or `old_lineno` if `side == "old"`). Summarize the feedback in <=10 lines, then apply the edits. An empty `files` array means the user approved with no comments — acknowledge and stop.
 - **2**: user cancelled. Acknowledge in one line and stop.
-- **1**: print the stderr the script captured, then stop.
+- other: print the stderr the command captured, then stop.
 
 `$ARGUMENTS` is an optional git revision range (`HEAD~3..HEAD`, `main...HEAD`, empty for working tree).
 ````
@@ -217,9 +229,10 @@ After the Bash returns, act based on the exit code:
 Claude Code loads the entire slash-command body as the prompt the
 agent responds to. Long bodies (extensive prerequisites, inline
 scripts, explanations) make the agent "think" longer before invoking
-the first tool. Keeping the body to a description, one script call,
-and three exit-code rules means the agent acts almost immediately;
-the launch script is on disk and tested, not regenerated each turn.
+the first tool. Keeping the body to a description, the start/wait
+calls, and three exit-code rules means the agent acts almost
+immediately; the launch script is on disk and tested, not regenerated
+each turn.
 
 ### Why the script uses tmux
 
@@ -242,9 +255,14 @@ revision specs (`HEAD~3..HEAD`, `main...HEAD`, `@^`) but each is a
 Vim or shell metacharacter that could break out of
 `-c "CodeReview <range>"`. The plugin's
 `NVIM_CODE_REVIEW_RESULT` env-var handshake puts the plugin in agent
-mode; the script polls for the sentinel file that records Neovim's
-exit code, then prints the review JSON via `jq` (exit 0), `review
-cancelled` (exit 2), or an error diagnostic (exit 1).
+mode. The script has three subcommands. `start` spawns the review and
+prints a handle, returning at once. `status <handle>` checks once
+(exit 3 still running, 0 done, 2 cancelled). `wait <handle>` polls the
+sentinel file every second until Neovim exits, then prints the review
+JSON via `jq` (exit 0), `review cancelled` (exit 2), or an error
+diagnostic (exit 1) — the same completion semantics as `status`.
+Calling the script with a bare range and no subcommand still runs the
+old blocking poll-and-print path.
 
 ### Verify the command loaded
 
@@ -296,14 +314,16 @@ session without the env var, Claude won't know when you're done.
 `<leader>Rq` cancels the session and exits Neovim with code 2. Claude
 will see the cancellation and stop.
 
-### Pause hangs Claude Code's Bash tool
+### Pausing to set a review aside
 
-`<leader>Rp` saves your in-progress session for later. The invocation
-Claude Code is blocked on never returns, so the agent sits idle until
-you submit or cancel. Prefer `<leader>Rq` (cancel) during an agent
-run; resume the paused session from your own Neovim session with
-`:CodeReviewSessions` (or `<leader>gR` if you took the recommended
-LazyVim layout in [installation.md](installation.md#recommended-lazyvim-layout)).
+`<leader>Rp` saves your in-progress session for later. The async
+launcher runs the review's `wait` in the background, so a pause no
+longer hangs the Bash tool — the agent stays free either way. Use pause
+when you genuinely want to set a review aside; resume it from your own
+Neovim session with `:CodeReviewSessions` (or `<leader>gR` if you took
+the recommended LazyVim layout in
+[installation.md](installation.md#recommended-lazyvim-layout)). You no
+longer need to pause merely to dodge the 10-minute cap.
 
 ### Quit Neovim entirely
 
@@ -364,12 +384,11 @@ No new iTerm2 tab opens; the script just prints a `tmux attach` line
   to surface the underlying error (often a missing dependency in your
   config or a plugin manager that has not finished initialising).
 
-Bash tool reaches its 10-minute timeout mid-review
-: Claude Code's Bash tool caps at 10 minutes; the launch script polls
-  for up to 5 hours but the agent's call is cut off first. Pause the
-  review with `<leader>Rp`, let the Bash time out, then re-invoke
-  `/interactive-review` and pick the saved session from
-  `:CodeReviewSessions`. (Or submit faster.)
+The review takes longer than 10 minutes
+: This is fine. The slash command runs `start` to spawn the review,
+  then runs `wait <handle>` in the background, so the review never
+  blocks the Bash tool's 10-minute cap. Take as long as you need; the
+  agent is notified when the background `wait` exits.
 
 ## Next
 
