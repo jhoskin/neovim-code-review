@@ -1,5 +1,7 @@
 -- Unit + property tests for render/paint.lua.
 -- Invoked by tests/unit/run.lua, which passes the harness as the argument.
+-- Covers: TST-RND-0002 (intra-line word highlights), TST-RND-0006 (gutter signs),
+--         TST-RND-0003 (treesitter on the loaded scratch buffer).
 
 local H = ...
 local describe, it, property = H.describe, H.it, H.property
@@ -248,7 +250,7 @@ describe("render/paint apply", function()
 
     paint.apply(view, m, store)
 
-    local ns = vim.api.nvim_create_namespace(paint.NS)
+    local ns = vim.api.nvim_create_namespace(paint.NS_COMMENTS)
     -- File comment puts a virt_lines extmark above row 1 on the new buffer.
     local marks = vim.api.nvim_buf_get_extmarks(new_buf, ns, 0, -1, { details = true })
     local has_virt_lines = false
@@ -286,7 +288,7 @@ describe("render/paint apply", function()
     }
 
     paint.apply(view, m, store)
-    local ns = vim.api.nvim_create_namespace(paint.NS)
+    local ns = vim.api.nvim_create_namespace(paint.NS_COMMENTS)
 
     local function comment_rows(buf)
       local rows = {}

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Test 19: :CodeReviewPause saves session JSON, closes diffview, nvim alive,
+# Test 19: :CodeReviewPause saves session JSON, closes the renderer, nvim alive,
 # Covers: TST-CLI-0007, TST-SES-0001, TST-SES-0003
 # notify mentions the session ID.
 # Covers REQ-CLI-0007
@@ -87,31 +87,40 @@ if [ -z "$diff_type" ] || [ "$diff_type" = "null" ]; then
 fi
 echo "Session contains diff_info: PASS"
 
-# Verify diffview is closed: no DiffviewView buffer should be active.
-cat > /tmp/cr-pause-diffview-check.lua <<'EOF'
-local lib_ok, lib = pcall(require, 'diffview.lib')
-local view = lib_ok and lib.get_current_view() or nil
+# Verify the renderer is closed: no code-review:// diff buffers remain and the
+# renderer reports no open windows.
+cat > /tmp/cr-pause-render-check.lua <<'EOF'
+local diff_bufs = 0
+for _, buf in ipairs(vim.api.nvim_list_bufs()) do
+  if vim.api.nvim_buf_is_valid(buf) then
+    local nm = vim.api.nvim_buf_get_name(buf)
+    if nm:find('code-review://', 1, true) then diff_bufs = diff_bufs + 1 end
+  end
+end
+local wins = #require('code-review.render.init').review_windows()
 vim.fn.writefile({
-  'view=' .. tostring(view),
-}, '/tmp/cr-pause-diffview-check.txt')
+  'diff_bufs=' .. tostring(diff_bufs),
+  'review_wins=' .. tostring(wins),
+}, '/tmp/cr-pause-render-check.txt')
 EOF
-rm -f /tmp/cr-pause-diffview-check.txt
-send_cmd "$SESSION" "luafile /tmp/cr-pause-diffview-check.lua"
+rm -f /tmp/cr-pause-render-check.txt
+send_cmd "$SESSION" "luafile /tmp/cr-pause-render-check.lua"
 sleep 1
 
-if [ ! -s /tmp/cr-pause-diffview-check.txt ]; then
-  echo "FAIL: diffview check file empty"
+if [ ! -s /tmp/cr-pause-render-check.txt ]; then
+  echo "FAIL: renderer check file empty"
   exit 1
 fi
-echo "--- diffview state ---"
-cat /tmp/cr-pause-diffview-check.txt
+echo "--- renderer state ---"
+cat /tmp/cr-pause-render-check.txt
 echo "--- end ---"
-view_line=$(grep '^view=' /tmp/cr-pause-diffview-check.txt | cut -d= -f2)
-if [ "$view_line" != "nil" ]; then
-  echo "FAIL: expected diffview view=nil after pause, got: $view_line"
+diff_bufs=$(grep '^diff_bufs=' /tmp/cr-pause-render-check.txt | cut -d= -f2)
+review_wins=$(grep '^review_wins=' /tmp/cr-pause-render-check.txt | cut -d= -f2)
+if [ "$diff_bufs" != "0" ] || [ "$review_wins" != "0" ]; then
+  echo "FAIL: expected renderer closed after pause, got diff_bufs=$diff_bufs review_wins=$review_wins"
   exit 1
 fi
-echo "Diffview closed: PASS"
+echo "Renderer closed: PASS"
 
 # Verify :messages contains the session id (notify output)
 session_id=$(jq -r '.session_id' "$session_file")
@@ -136,4 +145,4 @@ if ! grep -q "$session_id" /tmp/cr-pause-messages.txt; then
 fi
 echo "Notify mentions session id: PASS"
 
-echo "PASS: :CodeReviewPause persists session, closes diffview, leaves nvim running, notifies"
+echo "PASS: :CodeReviewPause persists session, closes the renderer, leaves nvim running, notifies"

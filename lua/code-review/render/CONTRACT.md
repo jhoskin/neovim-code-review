@@ -49,11 +49,13 @@ Invariants (property-tested):
 Keep: `parse_range`, `resolve_shas`, `_git`, `git_root`,
 `is_inside_work_tree`. Add (Stage B):
 - `changed_files(diff_info) -> FileEntry[]`
-  `FileEntry = { path, status = "M"|"A"|"D", }`
-- `file_contents(diff_info, path) -> old_lines, new_lines`
-  (old via `git show <base_sha>:<path>` or {} for added; new via
-  `git show <head_sha>:<path>` or working-tree read for working_tree
-  reviews; {} for deleted).
+  `FileEntry = { path, status = "M"|"A"|"D", old_path? }`
+  (`old_path` is the pre-rename name on a rename/copy, else nil).
+- `file_contents(diff_info, path[, old_path]) -> old_lines, new_lines`
+  (old via `git show <base_sha>:<old_path or path>` or {} for added;
+  new via `git show <head_sha>:<path>` or working-tree read for
+  working_tree reviews; {} for deleted). All git calls run with
+  `-c core.quotePath=false` so non-ASCII paths stay literal.
 Remove: `open` (DiffviewOpen), `get_diff_hunk` (replaced by the model;
 `diff_hunk` for review JSON is derived from the model — see below).
 
@@ -64,10 +66,17 @@ Owns the layout and the two scratch buffers per file.
 ```
 open(diff_info) -> view
   -- builds file panel + old/new windows; renders the first file
-view:show_file(path)        -- swap content of the two diff buffers (reuse buffers)
+view:set_path(path)         -- rename buffers + registry + reset cursor (no fill)
+view:show_file(path)        -- set_path + fill from the content provider
 view:close()
 view:current() -> { path, side = "old"|"new", win, buf }
 ```
+
+The orchestrator fills the diff buffers exactly once, via `paint.apply`,
+so it calls `set_path` (bookkeeping only). `show_file` layers the
+content-provider fill on top and is what tests and standalone callers
+use. `set_path` resets both diff windows to line 1 so a comment added
+right after a file switch anchors to a visible row.
 
 Buffer contract (REQ-RND-0005, spike-verified):
 - `nvim_create_buf(false, true)`, names `code-review://old/<path>` and
@@ -82,15 +91,20 @@ detection is "current win vs registry" (no diffview API).
 
 ## Paint (`render/paint.lua`)
 
-Pure helpers + extmark application in namespace `code_review_render`.
+Pure helpers + extmark application in two namespaces: diff paint in
+`code_review_render` (NS), comment markers in `code_review_comments`
+(NS_COMMENTS). The split lets a comment edit repaint only the markers.
 - `filler_lines(model) -> { old = int[], new = int[] }` — which buffer
   rows are fillers per side (pure; testable).
 - `apply(view, model, store)` — sets buffer lines from the model, starts
   treesitter (`vim.treesitter.start(buf, lang)` AFTER lines are set —
-  the buffer must be loaded or the tree is empty), paints add/change/del
-  line backgrounds + gutter signs, intra-line word highlights from
-  `row.intra` spans, and comment markers (sign + virt_lines) from the
-  store.
+  the buffer must be loaded or the tree is empty; stops any prior
+  highlighter first, since buffers are reused), paints add/change/del
+  line backgrounds + gutter signs and intra-line word highlights (NS),
+  then comment markers (NS_COMMENTS).
+- `apply_comments(view, model, store[, path])` — clears and repaints
+  only the comment markers (NS_COMMENTS); no buffer fill, no treesitter
+  restart, no diff repaint. The cheap path for a comment add/delete.
 - Highlight groups reuse the existing `CodeReview*` groups in
   `config.lua`; add `CodeReviewAdd/Change/Delete` + their sign groups.
 
@@ -106,14 +120,22 @@ Pure helpers + extmark application in namespace `code_review_render`.
 ## Orchestration (`render/init.lua`)
 
 ```
-open(diff_info)                 -- build view, panel, paint first file
-switch_file(path)
+open(diff_info, store, opts)    -- build view, panel, paint first file
+switch_file(path)               -- repaint diff + panel for a new file
+repaint_comments()              -- comment-only repaint after add/delete
 close()
+current_path() -> path | nil    -- file shown in the diff windows (panel-safe)
+review_windows() -> win[]        -- still-open renderer windows (lifecycle)
+diff_hunk(path, side, lineno, ctx?) -> string  -- unified hunk from the model
 cursor_context() -> { path, side = "old"|"new", lineno } | nil
   -- maps the current cursor row in a diff buffer back to a file line via
   -- the model's row table for the current file. REQ-RND-0009. This is
   -- what the comment layer calls instead of diffview's infer_cur_file.
 ```
+
+`switch_file` re-renders the panel so the per-file comment-count markers
+(`store:count_for(path)`) stay current; `repaint_comments` is the cheap
+path the comment layer calls after an add/delete (markers + panel only).
 
 `cursor_context` returns nil when the cursor is on a filler row or in
 the panel. `lineno` is the `old_lineno` or `new_lineno` of the row at

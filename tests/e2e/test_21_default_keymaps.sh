@@ -14,9 +14,10 @@ repo=$(bash "$(dirname "$0")/setup_repo.sh")
 echo "Test repo: $repo"
 
 cat > /tmp/cr-allkeys.lua <<'EOF'
-local lib = require('diffview.lib')
-local view = lib.get_current_view()
-local bufnr = view.cur_layout.b.file.bufnr
+local bufnr
+for _, buf in ipairs(vim.api.nvim_list_bufs()) do
+  if vim.api.nvim_buf_get_name(buf):find('code-review://new/', 1, true) then bufnr = buf end
+end
 local maps = vim.api.nvim_buf_get_keymap(bufnr, 'n')
 local want = { Rc = false, Rf = false, Rd = false, Rs = false, Rq = false, Rp = false }
 for _, m in ipairs(maps) do

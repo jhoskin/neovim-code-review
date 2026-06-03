@@ -22,15 +22,20 @@ local function reconstruct(model)
   return old, new
 end
 
--- Count visual lines each side contributes (real line OR filler = 1 row).
+-- Count the REAL (non-filler) lines each side contributes, plus the total
+-- visual height. (Counting 1 per row per side would be tautological -- every
+-- row is one visual line on each side by construction.)
 local function side_counts(model)
-  local o, n = 0, 0
+  local old_real, new_real = 0, 0
   for _, row in ipairs(model.rows) do
-    -- every row is one visual line on each side
-    o = o + 1
-    n = n + 1
+    if row.old_lineno ~= nil then
+      old_real = old_real + 1
+    end
+    if row.new_lineno ~= nil then
+      new_real = new_real + 1
+    end
   end
-  return o, n
+  return old_real, new_real, #model.rows
 end
 
 describe("render/diff compute", function()
@@ -129,12 +134,17 @@ end)
 
 -- ── Property: alignment equality (REQ-RND-0004) ────────────────────────
 -- Both sides contribute the same number of visual rows.
-property("old and new visual-row counts are equal", function()
+property("aligned rows recover each side's line count and pad to a common height", function()
   return { old = H.rand_lines(12), new = H.rand_lines(12) }
 end, function(input)
   local m = diff.compute(input.old, input.new)
-  local o, n = side_counts(m)
-  eq(o, n, "aligned side row counts must match")
+  local old_real, new_real, visual = side_counts(m)
+  -- Real (non-filler) lines on each side recover the original inputs.
+  eq(old_real, #input.old, "old real-line count recovers the input")
+  eq(new_real, #input.new, "new real-line count recovers the input")
+  -- Every row is one visual line per side, so the aligned height is at least as
+  -- tall as the longer side (fillers pad the shorter one).
+  ok(visual >= math.max(#input.old, #input.new), "aligned height covers the longer side")
 end)
 
 -- ── Property: word_diff reconstruction ─────────────────────────────────

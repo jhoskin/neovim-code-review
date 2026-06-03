@@ -19,14 +19,16 @@ cat > /tmp/cr-file-sign-check.lua <<'EOF'
 local cr = require('code-review')
 cr._session.store:add_file_comment('greeting.txt', 'File-level comment test')
 
-local lib = require('diffview.lib')
-local view = lib.get_current_view()
-local bufnr = view.cur_layout.b.file.bufnr
+-- Repaint comment markers from the store (the renderer's incremental path).
+require('code-review.render.init').repaint_comments()
 
--- Re-apply extmarks so the new file comment is rendered
-require('code-review.ui').reapply_from_store(bufnr, 'greeting.txt', cr._session.store, 'new')
+-- greeting.txt is modified, so the file comment lands on the new-side buffer.
+local bufnr
+for _, buf in ipairs(vim.api.nvim_list_bufs()) do
+  if vim.api.nvim_buf_get_name(buf):find('code-review://new/', 1, true) then bufnr = buf end
+end
 
-local ns = vim.api.nvim_create_namespace('code_review')
+local ns = vim.api.nvim_create_namespace('code_review_comments')
 local marks = vim.api.nvim_buf_get_extmarks(bufnr, ns, 0, -1, { details = true })
 
 local lines = {}

@@ -3,6 +3,7 @@
 -- renderer against a fresh store, and asserts the view opened, cursor_context
 -- maps real rows / rejects filler rows, and switch_file moves the current file.
 -- Runs under `nvim --headless -l tests/unit/run.lua render_init`.
+-- Covers: TST-RND-0009 (cursor row -> {path, side, lineno} mapping).
 
 local H = ...
 local describe, it = H.describe, H.it
@@ -117,6 +118,17 @@ describe("render/init orchestration", function()
       ok(octx ~= nil, "cursor_context on a real old-side row")
       eq(octx.side, "old")
       eq(octx.lineno, 1)
+      -- A context row carries BOTH line numbers (spec 3.2 invariant: both
+      -- populated for context/modified lines), not just the anchor side.
+      eq(octx.old_lineno, 1, "context row carries old_lineno")
+      eq(octx.new_lineno, 1, "context row carries new_lineno")
+
+      -- The add row (new line 2) is a pure addition: old_lineno stays nil.
+      vim.api.nvim_set_current_win(view.new_win)
+      vim.api.nvim_win_set_cursor(view.new_win, { 2, 0 })
+      local actx = render.cursor_context()
+      eq(actx.new_lineno, 2, "add row carries new_lineno")
+      H.assert.is_nil(actx.old_lineno, "add row has no old_lineno")
 
       -- switch_file changes the current path.
       render.switch_file("b.txt")
@@ -125,6 +137,34 @@ describe("render/init orchestration", function()
       local old_win = view.old_win
       render.close()
       ok(not vim.api.nvim_win_is_valid(old_win), "close tore down the view")
+    end)
+    rmrf(repo)
+  end)
+
+  it("repaint_comments refreshes the panel per-file comment count", function()
+    -- Fix #4: adding a comment then repainting must update the panel marker.
+    local repo = make_repo()
+    in_dir(repo, function()
+      local info = diff.resolve_shas(diff.parse_range(nil))
+      local store = Store.new()
+      local view = render.open(info, store)
+
+      render.switch_file("a.txt")
+      -- The panel line for a.txt starts with no count marker.
+      local function panel_line()
+        for _, l in ipairs(vim.api.nvim_buf_get_lines(view.panel_buf, 0, -1, false)) do
+          if l:find("a.txt", 1, true) then
+            return l
+          end
+        end
+      end
+      ok(panel_line() and not panel_line():find("(1)", 1, true), "no count before commenting: " .. tostring(panel_line()))
+
+      store:add_line_comment("a.txt", nil, 2, "new", "note")
+      render.repaint_comments()
+      ok(panel_line() and panel_line():find("(1)", 1, true), "panel shows (1) after comment: " .. tostring(panel_line()))
+
+      render.close()
     end)
     rmrf(repo)
   end)

@@ -119,9 +119,22 @@ local function spans_from_unmatched(toks, matched)
   return spans
 end
 
+-- Lines longer than this skip word-level diffing. lcs_match is O(la*lb) over
+-- tokens and tokenize allocates per byte, so a single very long changed line (a
+-- minified bundle, a base64/data-URI blob) would build a multi-million-cell DP
+-- table and stall. Above the cap the change row still shows via its line
+-- background; only the intra-line word highlight is dropped.
+local MAX_INTRA_BYTES = 2048
+
 -- Word-level intra-line diff between two strings. Returns { old = spans,
 -- new = spans } of changed byte ranges.
 function M.word_diff(old_text, new_text)
+  if old_text == new_text then
+    return { old = {}, new = {} }
+  end
+  if #old_text > MAX_INTRA_BYTES or #new_text > MAX_INTRA_BYTES then
+    return { old = {}, new = {} }
+  end
   local a = tokenize(old_text)
   local b = tokenize(new_text)
   local am, bm = lcs_match(a, b)
