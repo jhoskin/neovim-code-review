@@ -16,7 +16,14 @@ vim.api.nvim_create_user_command("CodeReview", function(opts)
     vim.api.nvim_create_autocmd("VimEnter", {
       once = true,
       callback = function()
-        require("code-review").start(arg)
+        -- VimEnter still fires mid-startup. Window/cursor changes made now can
+        -- be undone when Neovim draws the first screen, which would reset focus
+        -- to the file panel instead of the new-side diff buffer (REQ-RND-0012).
+        -- Defer one event-loop tick so the renderer's focus lands after startup
+        -- settles.
+        vim.schedule(function()
+          require("code-review").start(arg)
+        end)
       end,
     })
   end
