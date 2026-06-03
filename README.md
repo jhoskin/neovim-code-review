@@ -61,20 +61,24 @@ Then `:checkhealth code-review` to verify.
 
 During a review session, on diff buffers and the file panel:
 
-| Key          | Action                              |
-|--------------|-------------------------------------|
-| `<leader>Rc` | Add/edit line comment               |
-| `<leader>Rf` | Add/edit file comment               |
-| `<leader>Rd` | Delete comment at cursor            |
-| `<leader>Rs` | Show summary and submit             |
-| `<leader>Rp` | Pause session (save for later)      |
-| `<leader>Rq` | Cancel review (discard)             |
-| `<C-s>`      | Confirm comment (in float)          |
-| `q`          | Cancel comment/summary (in float)   |
+| Key          | Action                                       |
+|--------------|----------------------------------------------|
+| `<leader>Rn` | Next file (focus the new-side window)        |
+| `<leader>RN` | Previous file                                |
+| `<leader>Rc` | Add/edit line comment                        |
+| `<leader>Rf` | Add/edit file comment                        |
+| `<leader>Rd` | Delete comment at cursor                     |
+| `<leader>Rs` | Show summary and submit                      |
+| `<leader>Rp` | Pause session (save for later)               |
+| `<leader>Rq` | Cancel review (discard)                      |
+| `<C-s>`      | Confirm comment (in float)                   |
+| `q`          | Cancel comment/summary (in float)            |
 
 The `<leader>R` prefix avoids collision with LazyVim's `<leader>c*`
-code submenu. All keymaps are configurable — see
-[installation.md](docs/installation.md).
+code submenu. Every keymap is configurable, and a value may be a single
+key, a list of keys, or `false` to disable. For a faster, single-keystroke
+setup (`<Tab>`/`<S-Tab>` to move between files, `c`/`C` to comment) see the
+recommended layout in [installation.md](docs/installation.md).
 
 ## Agent integration
 

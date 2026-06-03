@@ -168,4 +168,54 @@ describe("render/init orchestration", function()
     end)
     rmrf(repo)
   end)
+
+  -- Covers: TST-RND-0010 (next/previous-file navigation focusing the new side).
+  it("next_file/prev_file cycle changed files and focus the new-side window", function()
+    local repo = make_repo()
+    in_dir(repo, function()
+      local info = diff.resolve_shas(diff.parse_range(nil))
+      local view = render.open(info, Store.new())
+      -- Files in git order: a.txt (modified), b.txt (untracked add).
+      eq(render.current_path(), "a.txt", "opens on the first file")
+
+      render.next_file()
+      eq(render.current_path(), "b.txt", "next_file advances to the second file")
+      eq(vim.api.nvim_get_current_win(), view.new_win, "focus moved into the new-side window")
+
+      render.next_file()
+      eq(render.current_path(), "a.txt", "next_file wraps from last back to first")
+
+      render.prev_file()
+      eq(render.current_path(), "b.txt", "prev_file wraps from first back to last")
+
+      render.prev_file()
+      eq(render.current_path(), "a.txt", "prev_file steps back")
+
+      render.close()
+    end)
+    rmrf(repo)
+  end)
+
+  it("focuses the old side when the file is a pure deletion (no new content)", function()
+    local base = vim.fn.resolve(vim.fn.tempname())
+    assert(vim.fn.mkdir(base, "p") == 1)
+    git(base, { "init", "-q" })
+    git(base, { "config", "user.email", "t@example.com" })
+    git(base, { "config", "user.name", "t" })
+    git(base, { "config", "commit.gpgsign", "false" })
+    write_file(base, "del.txt", "gone1\ngone2\n")
+    git(base, { "add", "-A" })
+    git(base, { "commit", "-q", "-m", "base" })
+    assert(os.remove(base .. "/del.txt"))
+
+    in_dir(base, function()
+      local info = diff.resolve_shas(diff.parse_range(nil))
+      local view = render.open(info, Store.new())
+      eq(render.current_path(), "del.txt", "the deleted file is the only changed file")
+      render.next_file() -- single file: re-renders and focuses; new side is empty
+      eq(vim.api.nvim_get_current_win(), view.old_win, "pure-deletion file focuses the old side")
+      render.close()
+    end)
+    rmrf(base)
+  end)
 end)

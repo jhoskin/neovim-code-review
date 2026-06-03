@@ -154,30 +154,39 @@ The command name `interactive-review` deliberately avoids
 does AI-only review of a diff. The two are complementary; only the
 plugin's command hands control to a human in Neovim.
 
-### Install the launch script
+### Quick install (recommended)
 
-The slash command's body is a one-liner that execs a real shell script
-on disk. The script is bundled with the plugin at
-`scripts/interactive-review-launch` and copied into your `~/.claude/`
-namespace as a one-time install step:
+Both the slash command and the launch script live in the repo, under
+`claude/commands/interactive-review.md` and
+`scripts/interactive-review-launch`. From a clone of the plugin repo, run
+the bundled installer:
+
+```bash
+claude/install.sh          # symlink into ~/.claude (tracks `git pull`)
+claude/install.sh --copy   # copy instead, if you prefer
+```
+
+It symlinks `~/.claude/commands/interactive-review.md` and
+`~/.claude/scripts/interactive-review-launch` into the repo, so a `git
+pull` keeps them current. With `--copy`, re-run the installer after an
+update to refresh the copies.
+
+### Manual install (alternative)
+
+If you would rather not run the installer, place the two files yourself.
+The launch script:
 
 ```bash
 mkdir -p ~/.claude/scripts
-cp ~/.local/share/nvim/lazy/neovim-code-review/scripts/interactive-review-launch \
+cp /path/to/neovim-code-review/scripts/interactive-review-launch \
    ~/.claude/scripts/interactive-review-launch
 chmod +x ~/.claude/scripts/interactive-review-launch
 ```
 
-If you installed the plugin manually (not via lazy.nvim), substitute
-the right source path — typically
-`~/.local/share/nvim/site/pack/plugins/start/neovim-code-review/scripts/interactive-review-launch`.
-
-Re-run the copy after `:Lazy update` to pick up script changes.
-
-### Install the slash command
-
-Copy the block below (the contents between the four-backtick fences,
-not the fences themselves) into `~/.claude/commands/interactive-review.md`:
+And the slash command — copy the block below (the contents between the
+four-backtick fences, not the fences themselves) into
+`~/.claude/commands/interactive-review.md` (it is also committed at
+`claude/commands/interactive-review.md`):
 
 ````markdown
 ---

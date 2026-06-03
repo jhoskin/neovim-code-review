@@ -2,6 +2,10 @@ local M = {}
 
 M.defaults = {
   keymaps = {
+    -- A value may be a string, a list of strings (binds several keys to the
+    -- same action), or false to disable. Buffer-local to the review buffers.
+    next_file = "<leader>Rn",
+    prev_file = "<leader>RN",
     add_comment = "<leader>Rc",
     file_comment = "<leader>Rf",
     delete_comment = "<leader>Rd",
