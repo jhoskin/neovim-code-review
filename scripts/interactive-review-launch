@@ -1,32 +1,43 @@
 #!/usr/bin/env bash
 # interactive-review-launch — hand off to Neovim for an interactive code review.
 #
-# Async-friendly. A review can run far longer than Claude Code's 10-minute
+# Async + durable. A review can run far longer than Claude Code's 10-minute
 # Bash-tool cap, so `start` spawns the review and returns a handle immediately
-# instead of blocking. The caller then polls `status <handle>` (one-shot) or
-# runs `wait <handle>` in the background to block until the review finishes.
+# instead of blocking. The caller polls `status <handle>` (one-shot) or runs
+# `wait <handle>` in the background to block until the review finishes.
+#
+# The review runs in a detached tmux session on its own explicit socket. That
+# session is the durable supervisor and the source of truth for state: it
+# outlives this script, the iTerm tab, and even iTerm itself. The session's
+# existence IS the running/finished state, so:
+#   - closing the review tab only DETACHES a client; the session survives and is
+#     reattachable, and `wait` still completes when the review ends;
+#   - if the session is killed without a submit (crash / forced close), `status`
+#     and `wait` detect "aborted" promptly instead of hanging.
+# An explicit `-S` socket gives that durable server a fixed address so every
+# client (this script, the iTerm tab, your own terminal) reaches the same one.
 #
 # Subcommands:
 #   start [<git-range>]      spawn the review; print a HANDLE on stdout, exit 0
 #   status <handle>          one-shot check: exit 3=running, 0=done (review JSON
-#                            on stdout), 2=cancelled, 1/other=error
+#                            on stdout), 2=cancelled/aborted, 1/other=error
 #   wait <handle> [interval] block, polling every <interval>s (default 1), until
 #                            the review finishes; same completion semantics as
 #                            status. Intended to be run in the background.
 #   <git-range> | (nothing)  legacy: start + wait in one blocking call
 #
-# When the review finishes, the iTerm2 tab opened for it is closed and the tmux
-# session + temp files are cleaned up. Frequent polling (the default 1s in
-# `wait`) means this happens promptly after the user submits or cancels.
+# When the review reaches a terminal state, the iTerm2 tab, the tmux session,
+# and the temp files are cleaned up.
 #
 # Exit codes (status / wait / legacy):
 #   0  submitted (review JSON printed on stdout)
-#   2  cancelled
+#   2  cancelled, or aborted (session ended without a submit)
 #   1  error (diagnostic on stderr)
 #   3  still running (status only)
 #
 # Dependencies: bash, tmux, jq, nvim (+ the neovim-code-review plugin).
-# Optional: it2 CLI for automatic iTerm2 tab attachment.
+# Optional: it2 CLI for automatic iTerm2 tab attachment (otherwise the script
+# prints the `tmux -S … attach` command to run yourself).
 
 set -euo pipefail
 
@@ -52,16 +63,24 @@ spawn_review() {
   reject_unsafe_range "$range"
 
   HANDLE=$(mktemp "${TMPDIR:-/tmp}/nvim-code-review.XXXXXX")
-  local base session sentinel
+  local base session sentinel sock
   base=$(basename "$HANDLE")
   # tmux treats `.` and `:` as target separators, so the session name must not
   # contain the mktemp suffix's dot; map any non-safe char to `-`.
   session="code-review-${base//[!A-Za-z0-9_]/-}"
   sentinel="$HANDLE.done"
+  # Use a dedicated, explicit tmux socket so the session is created on the SAME
+  # server the attach (iTerm tab, or a manual command) connects to. Without it,
+  # when the launcher runs in an environment whose $TMUX / $TMUX_TMPDIR differs
+  # from the attaching terminal's, the session lands on one server and `tmux
+  # attach` looks at another -> "no sessions". The socket lives in /tmp (not
+  # $TMPDIR) so both sides resolve the same path.
+  sock="/tmp/cr-${session}.sock"
 
   # Neovim needs a real PTY, which Claude Code's Bash tool does not provide, so
-  # run it inside a detached tmux session.
-  if ! tmux new-session -d -s "$session" -x 220 -y 60 \
+  # run it inside a detached tmux session on our own socket. `env -u TMUX` keeps
+  # it fully decoupled from any tmux the caller is already inside.
+  if ! env -u TMUX tmux -S "$sock" new-session -d -s "$session" -x 220 -y 60 \
       "NVIM_CODE_REVIEW_RESULT='$HANDLE' nvim -c 'CodeReview $range'; echo \$? > '$sentinel'"; then
     printf 'interactive-review-launch: failed to start the review session\n' >&2
     rm -f "$HANDLE"
@@ -73,43 +92,80 @@ spawn_review() {
     it2 tab new >/dev/null
     tab_sid=$(it2 session get-var id 2>/dev/null || true)
     it2 session set-name "code review" >/dev/null 2>&1 || true
-    it2 run "tmux attach -t $session" >/dev/null
+    it2 run "tmux -S $sock attach -t $session" >/dev/null
     printf 'Review opened in a new iTerm2 tab (tmux session: %s).\n' "$session" >&2
   else
-    printf 'Attach to the review with:  tmux attach -t %s\n' "$session" >&2
+    printf 'Attach to the review with:  tmux -S %s attach -t %s\n' "$sock" "$session" >&2
   fi
   printf 'Submit with <leader>Rs, cancel with <leader>Rq.\n' >&2
 
   {
     printf 'session=%s\n' "$session"
     printf 'tab_sid=%s\n' "$tab_sid"
+    printf 'sock=%s\n' "$sock"
   } > "$HANDLE.state"
+}
+
+# Read <handle>.state into STATE_SESSION / STATE_SOCK / STATE_TAB_SID (empty if
+# absent). Parsed line-by-line, never sourced.
+read_state() {
+  STATE_SESSION=""
+  STATE_SOCK=""
+  STATE_TAB_SID=""
+  local k v
+  [ -f "$1.state" ] || return 0
+  while IFS='=' read -r k v; do
+    case "$k" in
+      session) STATE_SESSION="$v" ;;
+      sock) STATE_SOCK="$v" ;;
+      tab_sid) STATE_TAB_SID="$v" ;;
+    esac
+  done < "$1.state"
+}
+
+# Is the durable review session still alive on its server?
+session_alive() {
+  [ -n "$STATE_SOCK" ] && [ -n "$STATE_SESSION" ] \
+    && tmux -S "$STATE_SOCK" has-session -t "$STATE_SESSION" 2>/dev/null
 }
 
 # Tear down the review's tmux session, iTerm tab, and temp files. Idempotent.
 cleanup_review() {
-  local handle="$1" session="" tab_sid="" k v
-  if [ -f "$handle.state" ]; then
-    # Parse key=value lines without sourcing (the state file is ours, but never
-    # eval file content).
-    while IFS='=' read -r k v; do
-      case "$k" in
-        session) session="$v" ;;
-        tab_sid) tab_sid="$v" ;;
-      esac
-    done < "$handle.state"
-  fi
-  [ -n "$session" ] && tmux kill-session -t "$session" 2>/dev/null || true
-  { [ -n "$tab_sid" ] && it2 session close -s "$tab_sid" -f; } >/dev/null 2>&1 || true
+  local handle="$1"
+  read_state "$handle"
+  [ -n "$STATE_SOCK" ] && [ -n "$STATE_SESSION" ] \
+    && tmux -S "$STATE_SOCK" kill-session -t "$STATE_SESSION" 2>/dev/null || true
+  { [ -n "$STATE_TAB_SID" ] && it2 session close -s "$STATE_TAB_SID" -f; } >/dev/null 2>&1 || true
   rm -f "$handle" "$handle.done" "$handle.state"
+  [ -n "$STATE_SOCK" ] && rm -f "$STATE_SOCK" || true
 }
 
-# One-shot poll. Returns RUNNING_RC if the review is not finished; otherwise
-# emits the result (JSON on submit), cleans up, and returns the review's exit
-# code (0 submit / 2 cancel / other error).
+# One-shot poll. The durable tmux session is the source of truth for liveness:
+#   - sentinel present            -> the command recorded an outcome; emit it
+#   - no sentinel, session alive  -> still running (RUNNING_RC)
+#   - no sentinel, session gone   -> aborted: Neovim/the tab was killed without
+#                                    submitting (a closed tab only DETACHES, so
+#                                    this means a real kill/crash, not a close)
+# Emits the result (JSON on submit) and cleans up on any terminal state.
 poll_once() {
   local handle="$1" sentinel="$1.done" rc review_path
-  [ -f "$sentinel" ] || return "$RUNNING_RC"
+  read_state "$handle"
+
+  if [ ! -f "$sentinel" ]; then
+    if session_alive; then
+      return "$RUNNING_RC"
+    fi
+    # Session gone and nothing recorded. Brief grace for a teardown/write race
+    # (the inner `echo $? > sentinel` completes just before the session ends),
+    # then declare the review aborted.
+    sleep 0.2
+    if [ ! -f "$sentinel" ]; then
+      printf 'review aborted: the session ended without submitting\n' >&2
+      cleanup_review "$handle"
+      return 2
+    fi
+  fi
+
   rc=$(cat "$sentinel" 2>/dev/null || echo 1)
   case "$rc" in
     0)

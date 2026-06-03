@@ -27,7 +27,7 @@ It polls every second and exits the moment the user submits or cancels; you are 
 Step 3 — when the background `wait` completes, act on its exit code:
 
 - **0**: parse the printed JSON. Each `files[].lines[]` entry is a comment on `path` at `new_lineno` (or `old_lineno` if `side == "old"`). Summarize the feedback in <=10 lines, then apply the edits. An empty `files` array means the user approved with no comments — acknowledge and stop.
-- **2**: user cancelled. Acknowledge in one line and stop.
+- **2**: cancelled, or aborted (the review ended with no feedback — e.g. the window was closed). Acknowledge in one line and stop.
 - other: print the stderr the command captured, then stop.
 
 `$ARGUMENTS` is an optional git revision range (`HEAD~3..HEAD`, `main...HEAD`, empty for working tree).
