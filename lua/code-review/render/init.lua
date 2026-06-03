@@ -85,6 +85,45 @@ local function render_path(path)
   return model
 end
 
+-- Move focus into the new-side diff window so a line comment / edit lands on the
+-- version the reviewer cares about. Edge case: a pure-deletion file has no new
+-- content (the new side is all filler, nothing to comment on), so focus the old
+-- side instead. Cursor goes to the top (set_path already reset it).
+local function focus_new_win()
+  local v = state.view
+  if not v then
+    return
+  end
+  local target = v.new_win
+  if state.current_path then
+    local model = model_for(state.current_path)
+    local has_new = false
+    for _, row in ipairs(model.rows) do
+      if row.new_lineno ~= nil then
+        has_new = true
+        break
+      end
+    end
+    if not has_new and v.old_win then
+      target = v.old_win
+    end
+  end
+  if target and vim.api.nvim_win_is_valid(target) then
+    vim.api.nvim_set_current_win(target)
+    pcall(vim.api.nvim_win_set_cursor, target, { 1, 0 })
+  end
+end
+
+-- 1-based index of `path` in the changed-files list, or nil.
+local function index_of(path)
+  for i, entry in ipairs(state.files) do
+    if entry.path == path then
+      return i
+    end
+  end
+  return nil
+end
+
 -- Open the renderer for a resolved diff_info against a comment store. Resolves
 -- changed files, builds the view + panel, wires navigation, and paints the
 -- first file. Returns the view handle.
@@ -122,6 +161,7 @@ function M.open(diff_info, store, opts)
   render_panel()
   panel.setup_keymaps(state.view, function(path)
     M.switch_file(path)
+    focus_new_win()
   end)
 
   -- Apply the caller's comment-action keymaps to the buffers we own. The two
@@ -156,6 +196,30 @@ function M.switch_file(path)
   end
   render_path(path)
   render_panel()
+end
+
+-- Switch to the next changed file (wrapping past the last back to the first) and
+-- focus the new-side window. No-op when there are no files.
+function M.next_file()
+  if not (state.view and #state.files > 0) then
+    return
+  end
+  local i = index_of(state.current_path) or 0
+  local nxt = (i % #state.files) + 1
+  M.switch_file(state.files[nxt].path)
+  focus_new_win()
+end
+
+-- Switch to the previous changed file (wrapping past the first back to the last)
+-- and focus the new-side window.
+function M.prev_file()
+  if not (state.view and #state.files > 0) then
+    return
+  end
+  local i = index_of(state.current_path) or 1
+  local prv = ((i - 2) % #state.files) + 1
+  M.switch_file(state.files[prv].path)
+  focus_new_win()
 end
 
 -- Repaint just the comment markers for the current file from the store, plus the

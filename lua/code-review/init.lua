@@ -125,12 +125,28 @@ function M.diagnose()
   for _, l in ipairs(lines) do print(l) end
 end
 
+-- A keymap value may be a string, a list of strings, or false. Render the
+-- primary key for a human-facing hint.
+local function key_label(v)
+  if type(v) == "table" then
+    return v[1] or "?"
+  elseif v == false or v == nil then
+    return "(off)"
+  end
+  return v
+end
+
 function M._notify_started()
   local km = config.values.keymaps
   vim.notify(
     string.format(
-      "code-review: review session started. Keymaps: %s (line comment) · %s (file comment) · %s (submit) · %s (cancel) · %s (pause)",
-      km.add_comment, km.file_comment, km.summary, km.cancel, km.pause
+      "code-review: review started. %s/%s next/prev file · %s line · %s file comment · %s submit · %s cancel",
+      key_label(km.next_file),
+      key_label(km.prev_file),
+      key_label(km.add_comment),
+      key_label(km.file_comment),
+      key_label(km.summary),
+      key_label(km.cancel)
     ),
     vim.log.levels.INFO
   )
@@ -266,6 +282,21 @@ function M.copy()
   M._populate_hunks(data)
   export.to_clipboard(data)
   vim.notify("code-review: review copied to clipboard")
+end
+
+-- Move to the next / previous changed file (focuses the new-side window).
+function M.next_file()
+  if not M._session then
+    return
+  end
+  require("code-review.render.init").next_file()
+end
+
+function M.prev_file()
+  if not M._session then
+    return
+  end
+  require("code-review.render.init").prev_file()
 end
 
 function M.add_comment()
@@ -478,24 +509,32 @@ end
 
 -- Apply the line-diff comment-action keymaps to a renderer diff buffer. The
 -- renderer invokes this (via M._render_opts) when it builds the buffers.
+-- Bind one comment-action key buffer-locally. A keymap value may be a string
+-- (one key), a list of strings (bind several keys to the same action), or
+-- false (skip). nowait so single keys fire immediately.
+local function set_map(bufnr, lhs, fn, desc)
+  if lhs == nil or lhs == false then
+    return
+  end
+  local keys = type(lhs) == "table" and lhs or { lhs }
+  for _, key in ipairs(keys) do
+    vim.keymap.set("n", key, fn, { buffer = bufnr, nowait = true, desc = desc })
+  end
+end
+
 function M._set_keymaps(bufnr)
   if not bufnr or not vim.api.nvim_buf_is_valid(bufnr) then
     return
   end
   local km = config.values.keymaps
-  local function map(lhs, fn, desc)
-    if lhs == false then
-      return
-    end
-    vim.keymap.set("n", lhs, fn, { buffer = bufnr, nowait = true, desc = desc })
-  end
-
-  map(km.add_comment, M.add_comment, "Code review: add line comment")
-  map(km.delete_comment, M.delete_comment, "Code review: delete comment")
-  map(km.summary, M.submit, "Code review: submit (show summary)")
-  map(km.file_comment, M.add_file_comment, "Code review: add file comment")
-  map(km.cancel, M.cancel, "Code review: cancel review")
-  map(km.pause, M.pause, "Code review: pause session")
+  set_map(bufnr, km.next_file, M.next_file, "Code review: next file")
+  set_map(bufnr, km.prev_file, M.prev_file, "Code review: previous file")
+  set_map(bufnr, km.add_comment, M.add_comment, "Code review: add line comment")
+  set_map(bufnr, km.delete_comment, M.delete_comment, "Code review: delete comment")
+  set_map(bufnr, km.file_comment, M.add_file_comment, "Code review: add file comment")
+  set_map(bufnr, km.summary, M.submit, "Code review: submit (show summary)")
+  set_map(bufnr, km.cancel, M.cancel, "Code review: cancel review")
+  set_map(bufnr, km.pause, M.pause, "Code review: pause session")
 end
 
 -- Apply the file-panel comment-action keymaps to the renderer panel buffer.
@@ -504,17 +543,12 @@ function M._set_file_panel_keymaps(bufnr)
     return
   end
   local km = config.values.keymaps
-  local function map(lhs, fn, desc)
-    if lhs == false then
-      return
-    end
-    vim.keymap.set("n", lhs, fn, { buffer = bufnr, nowait = true, desc = desc })
-  end
-
-  map(km.file_comment, M.add_file_comment, "Code review: add file comment")
-  map(km.summary, M.submit, "Code review: submit (show summary)")
-  map(km.cancel, M.cancel, "Code review: cancel review")
-  map(km.pause, M.pause, "Code review: pause session")
+  set_map(bufnr, km.next_file, M.next_file, "Code review: next file")
+  set_map(bufnr, km.prev_file, M.prev_file, "Code review: previous file")
+  set_map(bufnr, km.file_comment, M.add_file_comment, "Code review: add file comment")
+  set_map(bufnr, km.summary, M.submit, "Code review: submit (show summary)")
+  set_map(bufnr, km.cancel, M.cancel, "Code review: cancel review")
+  set_map(bufnr, km.pause, M.pause, "Code review: pause session")
 end
 
 return M

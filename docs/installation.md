@@ -213,8 +213,11 @@ scannable form, but the values come from here.
 ```lua
 require("code-review").setup({
   -- Buffer-local keymaps set on the renderer's diff and file-panel
-  -- buffers during a review session.
+  -- buffers during a review session. A value may be a string (one key), a
+  -- list of strings (bind several keys to the action), or false (disable).
   keymaps = {
+    next_file       = "<leader>Rn",  -- next changed file (focus new side)
+    prev_file       = "<leader>RN",  -- previous changed file
     add_comment     = "<leader>Rc",  -- line comment at cursor
     file_comment    = "<leader>Rf",  -- file-level comment
     delete_comment  = "<leader>Rd",  -- delete comment at cursor
@@ -256,6 +259,7 @@ default. The same is true when you pass the table via lazy.nvim's
   main = "code-review",
   opts = {
     keymaps = {
+      -- A value is a string, a list of keys ({ "c", "<leader>Rc" }), or false.
       add_comment = "<leader>rc", -- remap to lowercase prefix
       cancel      = false,        -- disable default; bind yourself
     },
@@ -291,6 +295,8 @@ so which-key shows them under the `<leader>R` group as soon as you hit
 
 | Key          | Action                                  | Diff buffers | File panel |
 |--------------|-----------------------------------------|:------------:|:----------:|
+| `<leader>Rn` | Next file (focus the new-side window)   | yes          | yes        |
+| `<leader>RN` | Previous file                           | yes          | yes        |
 | `<leader>Rc` | Add/edit line comment at cursor         | yes          | no         |
 | `<leader>Rd` | Delete comment at cursor                | yes          | no         |
 | `<leader>Rf` | Add/edit file-level comment             | yes          | yes        |
@@ -335,16 +341,18 @@ have nothing else on `<leader>r`, remapping to lowercase via
 `opts.keymaps` is reasonable:
 
 ```lua
-opts = {
-  keymaps = {
-    add_comment    = "<leader>rc",
-    file_comment   = "<leader>rf",
-    delete_comment = "<leader>rd",
-    summary        = "<leader>rs",
-    pause          = "<leader>rp",
-    cancel         = "<leader>rq",
-  },
-}
+    opts = {
+      -- Single key (fast) + <leader>R* (discoverable in which-key). The maps
+      -- are buffer-local to the review's nofile buffers, so they don't affect
+      -- normal editing. Destructive actions keep only <leader>R* so a stray
+      -- key can't end a review.
+      keymaps = {
+        next_file    = { "<Tab>",   "<leader>Rn" },
+        prev_file    = { "<S-Tab>", "<leader>RN" },
+        add_comment  = { "c",       "<leader>Rc" }, -- line comment (diff)
+        file_comment = { "C",       "<leader>Rf" }, -- file comment (panel/diff)
+      },
+    },
 ```
 
 For the launch commands, group them under `<leader>g` so they live
