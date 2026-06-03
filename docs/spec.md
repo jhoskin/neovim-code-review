@@ -365,20 +365,31 @@ vim.api.nvim_set_hl(0, "CodeReviewComment", { default = true, link = "Comment" }
 vim.api.nvim_set_hl(0, "CodeReviewSign", { default = true, link = "DiagnosticInfo" })
 vim.api.nvim_set_hl(0, "CodeReviewFileComment", { default = true, link = "Comment" })
 vim.api.nvim_set_hl(0, "CodeReviewFileSign", { default = true, link = "DiagnosticHint" })
+
+-- Diff line backgrounds link to the colorscheme's diff groups.
+vim.api.nvim_set_hl(0, "CodeReviewAdd", { default = true, link = "DiffAdd" })
+vim.api.nvim_set_hl(0, "CodeReviewChange", { default = true, link = "DiffChange" })
+vim.api.nvim_set_hl(0, "CodeReviewDelete", { default = true, link = "DiffDelete" })
+-- Current file row in the panel.
+vim.api.nvim_set_hl(0, "CodeReviewPanelCurrent", { default = true, link = "Visual" })
 ```
 
-The `default = true` flag allows colorschemes and user config to override
-these without load-order issues.
+The high-contrast diff accents take background-aware defaults chosen by
+`&background` rather than a simple link: `CodeReviewIntraAdd` and
+`CodeReviewIntraDelete` highlight the changed words (green on the new side, red
+on the old), and `CodeReviewAddSign` / `CodeReviewChangeSign` /
+`CodeReviewDeleteSign` colour the `+` / `~` / `-` gutter signs brightly. The
+`default = true` flag allows colorschemes and user config to override these
+without load-order issues.
 
 **File-level comments** are rendered with two visual elements:
 
-1. A **virtual line above line 1** showing the comment text, using highlight
-   group `CodeReviewFileComment`.
-2. A **sign on line 1** (`📄`, configurable via
-   `config.file_sign_text`) using highlight group `CodeReviewFileSign`.
-   The sign is visible whenever line 1 is in view; this provides a
-   discoverable indicator even when the user is scrolled away from the
-   virtual line.
+1. A **virtual line above line 1** of the file's diff buffer showing the
+   comment text, using highlight group `CodeReviewFileComment`.
+2. A **📄 sign in the file panel** on that file's row (`📄` configurable via
+   `config.file_sign_text`, highlight group `CodeReviewFileSign`), so a reader
+   scanning the file tree sees which files carry a comment without opening
+   each. The diff buffer itself carries no file-comment sign.
 
 **Buffer lifecycle**: the plugin creates and destroys diff buffers as the
 user navigates files. Extmarks are buffer-local and are lost when a buffer is
@@ -440,6 +451,14 @@ require("code-review").setup({
     comment = { link = "Comment" },
     sign = { link = "DiagnosticInfo" },
     file_comment = { link = "Comment" },
+    file_sign = { link = "DiagnosticHint" },
+    -- High-contrast diff accents. Defaults are background-aware; override any.
+    intra_add = { bg = "#1f6f3f", fg = "#ffffff", bold = true },
+    intra_delete = { bg = "#7a2c33", fg = "#ffffff", bold = true },
+    add_sign = { fg = "#3fb950", bold = true },
+    change_sign = { fg = "#d29922", bold = true },
+    delete_sign = { fg = "#f85149", bold = true },
+    panel_current = { link = "Visual" },
   },
   sign_text = "●",
 })
