@@ -33,10 +33,46 @@ end
 
 function M._define_highlights()
   local hl = M.values.highlights
-  vim.api.nvim_set_hl(0, "CodeReviewComment", vim.tbl_extend("force", { default = true }, hl.comment))
-  vim.api.nvim_set_hl(0, "CodeReviewSign", vim.tbl_extend("force", { default = true }, hl.sign))
-  vim.api.nvim_set_hl(0, "CodeReviewFileComment", vim.tbl_extend("force", { default = true }, hl.file_comment))
-  vim.api.nvim_set_hl(0, "CodeReviewFileSign", vim.tbl_extend("force", { default = true }, hl.file_sign))
+
+  -- default = true so a user colorscheme always wins; `override` (a value the
+  -- user passed in setup{ highlights = {...} }) wins over our built-in default.
+  local function set(name, default_spec, override)
+    vim.api.nvim_set_hl(0, name, vim.tbl_extend("force", { default = true }, override or default_spec))
+  end
+
+  -- Comment markers (colorscheme links, background-independent).
+  set("CodeReviewComment", hl.comment)
+  set("CodeReviewSign", hl.sign)
+  set("CodeReviewFileComment", hl.file_comment)
+  set("CodeReviewFileSign", hl.file_sign)
+
+  -- High-contrast diff accents. Line backgrounds stay linked to the
+  -- colorscheme's Diff* groups (see render/paint.lua); these add the vivid
+  -- word-level highlights and brightly coloured gutter signs. Defaults pick a
+  -- dark or light palette by &background; each is overridable via
+  -- config.values.highlights.{intra_add,intra_delete,add_sign,change_sign,
+  -- delete_sign,panel_current}.
+  local p = (vim.o.background == "light") and {
+    intra_add = { bg = "#aceebb", fg = "#04260f", bold = true },
+    intra_delete = { bg = "#ffc1c0", fg = "#4d0c0c", bold = true },
+    add_sign = { fg = "#1a7f37", bold = true },
+    change_sign = { fg = "#9a6700", bold = true },
+    delete_sign = { fg = "#cf222e", bold = true },
+    panel_current = { link = "Visual" },
+  } or {
+    intra_add = { bg = "#1f6f3f", fg = "#ffffff", bold = true },
+    intra_delete = { bg = "#7a2c33", fg = "#ffffff", bold = true },
+    add_sign = { fg = "#3fb950", bold = true },
+    change_sign = { fg = "#d29922", bold = true },
+    delete_sign = { fg = "#f85149", bold = true },
+    panel_current = { link = "Visual" },
+  }
+  set("CodeReviewIntraAdd", p.intra_add, hl.intra_add)
+  set("CodeReviewIntraDelete", p.intra_delete, hl.intra_delete)
+  set("CodeReviewAddSign", p.add_sign, hl.add_sign)
+  set("CodeReviewChangeSign", p.change_sign, hl.change_sign)
+  set("CodeReviewDeleteSign", p.delete_sign, hl.delete_sign)
+  set("CodeReviewPanelCurrent", p.panel_current, hl.panel_current)
 end
 
 return M

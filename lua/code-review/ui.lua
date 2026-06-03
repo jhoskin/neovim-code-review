@@ -142,13 +142,28 @@ function M.open_comment_float(opts)
     vim.api.nvim_buf_set_lines(buf, 0, -1, false, lines)
   end
 
-  local width = math.min(80, math.floor(vim.o.columns * 0.6))
-  local height = math.max(3, math.min(10, #vim.split(prefill, "\n") + 2))
+  local width = math.min(100, math.floor(vim.o.columns * 0.7))
+  local height = math.max(6, math.min(15, #vim.split(prefill, "\n") + 3))
 
-  local title = string.format(
-    " Comment — %s save · q cancel · <C-w>w leave (text preserved) ",
-    config.values.keymaps.confirm_comment
-  )
+  -- Title says whether the comment is line- or file-level so the reviewer knows
+  -- the scope at a glance, and names the file for a file comment (REQ-UIX-0011).
+  local keys = config.values.keymaps.confirm_comment
+  local title
+  if opts.kind == "file" then
+    local name = opts.path or ""
+    local budget = math.max(8, width - 46)
+    if #name > budget then
+      name = "…" .. name:sub(#name - budget + 2)
+    end
+    title = string.format(" File comment: %s — %s save · q cancel ", name, keys)
+  elseif opts.kind == "line" then
+    title = string.format(" Line comment — %s save · q cancel · <C-w>w leave ", keys)
+  else
+    title = string.format(
+      " Comment — %s save · q cancel · <C-w>w leave (text preserved) ",
+      keys
+    )
+  end
   local win = vim.api.nvim_open_win(buf, true, {
     relative = "cursor",
     row = 1,

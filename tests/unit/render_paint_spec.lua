@@ -161,21 +161,27 @@ describe("render/paint apply", function()
     eq(old_text[3], "", "added row is blank on the old (filler) side")
 
     -- REQ-RND-0002: intra-line word highlight lands on the changed token. Row 1
-    -- is a change of `1` -> `2` at byte 11; expect a CodeReviewIntra extmark
-    -- spanning that byte on both sides.
-    local function intra_spans(marks)
+    -- is a change of `1` -> `2` at byte 11. The new side uses CodeReviewIntraAdd
+    -- and the old side CodeReviewIntraDelete, so the changed words read green on
+    -- the new and red on the old.
+    local function intra_spans(marks, group)
       local out = {}
       for _, mk in ipairs(marks) do
-        if mk[4] and mk[4].hl_group == "CodeReviewIntra" then
+        if mk[4] and mk[4].hl_group == group then
           out[#out + 1] = { row = mk[2], col = mk[3], end_col = mk[4].end_col }
         end
       end
       return out
     end
-    local new_intra = intra_spans(vim.api.nvim_buf_get_extmarks(new_buf, ns, 0, -1, { details = true }))
-    local old_intra = intra_spans(vim.api.nvim_buf_get_extmarks(old_buf, ns, 0, -1, { details = true }))
-    eq(new_intra, { { row = 0, col = 10, end_col = 11 } }, "new intra span on changed byte")
-    eq(old_intra, { { row = 0, col = 10, end_col = 11 } }, "old intra span on changed byte")
+    local new_marks = vim.api.nvim_buf_get_extmarks(new_buf, ns, 0, -1, { details = true })
+    local old_marks = vim.api.nvim_buf_get_extmarks(old_buf, ns, 0, -1, { details = true })
+    local new_intra = intra_spans(new_marks, "CodeReviewIntraAdd")
+    local old_intra = intra_spans(old_marks, "CodeReviewIntraDelete")
+    eq(new_intra, { { row = 0, col = 10, end_col = 11 } }, "new intra span (IntraAdd) on changed byte")
+    eq(old_intra, { { row = 0, col = 10, end_col = 11 } }, "old intra span (IntraDelete) on changed byte")
+    -- The single-group CodeReviewIntra must no longer be used on either side.
+    eq(intra_spans(new_marks, "CodeReviewIntra"), {}, "no legacy CodeReviewIntra on new side")
+    eq(intra_spans(old_marks, "CodeReviewIntra"), {}, "no legacy CodeReviewIntra on old side")
   end)
 
   -- REQ-RND-0006: gutter signs sit on the side that holds the line, never on
@@ -251,15 +257,23 @@ describe("render/paint apply", function()
     paint.apply(view, m, store)
 
     local ns = vim.api.nvim_create_namespace(paint.NS_COMMENTS)
-    -- File comment puts a virt_lines extmark above row 1 on the new buffer.
+    -- File comment puts a virt_lines block above row 1 on the new buffer, and
+    -- (REQ-UIX-0006) no longer paints a sign there — the 📄 indicator lives in
+    -- the file panel now. The line comment below still carries its ● sign on
+    -- its own row, so we check only the file-comment row (0).
     local marks = vim.api.nvim_buf_get_extmarks(new_buf, ns, 0, -1, { details = true })
     local has_virt_lines = false
+    local file_row_has_sign = false
     for _, mk in ipairs(marks) do
       if mk[4] and mk[4].virt_lines then
         has_virt_lines = true
+        if mk[2] == 0 and mk[4].sign_text then
+          file_row_has_sign = true
+        end
       end
     end
     ok(has_virt_lines, "new buffer has a virt_lines comment marker")
+    ok(not file_row_has_sign, "file comment no longer paints a sign on the diff buffer")
   end)
 
   -- REQ-RND-0009: a line comment must be painted on the buffer for its side,

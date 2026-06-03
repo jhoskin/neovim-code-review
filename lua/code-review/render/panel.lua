@@ -12,6 +12,14 @@
 
 local M = {}
 
+-- Two panel namespaces. PANEL_NS carries the 📄 file-comment signs (rebuilt on
+-- every render so it tracks add/delete). CURRENT_NS carries the single
+-- current-file row highlight (rebuilt by set_current). They are split so a
+-- file switch redrawing the current-file mark never wipes the comment signs,
+-- and a re-render never wipes the current-file mark.
+local PANEL_NS = "code_review_panel"
+local CURRENT_NS = "code_review_panel_current"
+
 -- We own the line format, so path_at_cursor can parse it back. A line is:
 --   "M path/to/file.lua  (3)"
 -- The leading char is the status; the path is everything up to the trailing
@@ -52,6 +60,17 @@ local function count_for(store, path)
   return 0
 end
 
+-- Does this file carry a file-level comment? The real Store answers
+-- get_comments_for_file(path) -> { comment = ..., lines = ... } | nil; we guard
+-- the method so a light test stub without it simply shows no sign.
+local function has_file_comment(store, path)
+  if not (store and type(store.get_comments_for_file) == "function") then
+    return false
+  end
+  local file = store:get_comments_for_file(path)
+  return file ~= nil and file.comment ~= nil and file.comment ~= ""
+end
+
 local function format_line(f, store)
   local path = file_path(f)
   local status = file_status(f)
@@ -76,8 +95,58 @@ function M.render(view, files, store)
   vim.api.nvim_buf_set_lines(buf, 0, -1, false, lines)
   vim.bo[buf].modifiable = false
 
+  -- File-comment indicator: a 📄 in the gutter next to each file that carries a
+  -- file-level comment, so the reader sees which files have one without opening
+  -- each (REQ-UIX-0006). Rebuilt every render so it tracks add/delete.
+  local ns = vim.api.nvim_create_namespace(PANEL_NS)
+  vim.api.nvim_buf_clear_namespace(buf, ns, 0, -1)
+  for i, path in ipairs(paths) do
+    if has_file_comment(store, path) then
+      vim.api.nvim_buf_set_extmark(buf, ns, i - 1, 0, {
+        sign_text = vim.g.code_review_file_sign or "📄",
+        sign_hl_group = "CodeReviewFileSign",
+      })
+    end
+  end
+
   state[buf] = { paths = paths, view = view }
   return paths
+end
+
+-- Highlight the current file's row and move the panel cursor to it, so the tree
+-- shows which file the diff is displaying even while focus is in a diff window,
+-- and returning to the panel lands on that file (REQ-RND-0011). Clear-then-set
+-- in CURRENT_NS so only one row is ever marked.
+function M.set_current(view, path)
+  local buf = view and view.panel_buf
+  if not (buf and vim.api.nvim_buf_is_valid(buf)) then
+    return
+  end
+  local ns = vim.api.nvim_create_namespace(CURRENT_NS)
+  vim.api.nvim_buf_clear_namespace(buf, ns, 0, -1)
+
+  local st = state[buf]
+  local paths = st and st.paths
+  if not paths then
+    return
+  end
+  local row
+  for i, p in ipairs(paths) do
+    if p == path then
+      row = i
+      break
+    end
+  end
+  if not row then
+    return
+  end
+  vim.api.nvim_buf_set_extmark(buf, ns, row - 1, 0, {
+    line_hl_group = "CodeReviewPanelCurrent",
+  })
+  local win = view.panel_win
+  if win and vim.api.nvim_win_is_valid(win) then
+    pcall(vim.api.nvim_win_set_cursor, win, { row, 0 })
+  end
 end
 
 -- Parse the path out of the panel line under the cursor. Prefers the stashed
