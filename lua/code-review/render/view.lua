@@ -88,6 +88,9 @@ function M.open(diff_info, opts)
   local panel_win = vim.api.nvim_get_current_win()
   vim.api.nvim_win_set_buf(panel_win, panel_buf)
   self.panel_win = panel_win
+  -- Reserve a gutter so the 📄 file-comment sign has somewhere to land
+  -- (panel.lua, REQ-UIX-0006).
+  vim.wo[panel_win].signcolumn = "yes"
   -- Panel on the left, narrow.
   local panel_width = opts.panel_width or 30
 

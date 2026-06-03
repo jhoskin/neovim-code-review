@@ -847,12 +847,12 @@ group, with the extmark logical ID `extmark.comment` (see REQ-CMT-0002).
 **REQ-UIX-0005** (Ubiquitous): All keybindings shall be user-configurable via
 the plugin's `setup()` function (see section 4.5).
 
-**REQ-UIX-0006** (Ubiquitous): The system shall render file-level comments
-with two visual elements on the file's diff buffer: a virtual line above
-line 1 showing the comment body (highlight `CodeReviewFileComment`), and
-a sign on line 1 (highlight `CodeReviewFileSign`). The sign is visible
-whenever line 1 is in view, providing a discoverable indicator
-independent of scroll position.
+**REQ-UIX-0006** (Ubiquitous): The system shall indicate a file-level comment
+in two places: a 📄 sign in the file panel's gutter on that file's row
+(highlight `CodeReviewFileSign`), so the reader sees which files carry a comment
+without opening each, and a virtual line above line 1 of the file's diff buffer
+showing the comment body (highlight `CodeReviewFileComment`). The diff buffer
+itself carries no file-comment sign.
 
 **REQ-UIX-0007** (Event-driven): When the user quits Neovim without submitting
 a review, the system shall intercept the exit via `VimLeavePre`, allow the quit
@@ -879,6 +879,12 @@ shall display the exact Markdown that would be exported on confirmation
 of confirming (e.g., "Confirming will copy the markdown below to your
 clipboard and close the review" in interactive mode, "Confirming will
 write to the result file and exit Neovim" in agent mode).
+
+**REQ-UIX-0011** (Ubiquitous): The comment input float (SCR-COMMENT-01) shall
+state in its title whether the comment is line-level ("Line comment") or
+file-level ("File comment: <file>", naming the file), and shall be sized to give
+room for multi-line comments (width up to 70% of the editor, height growing with
+the prefilled content).
 
 ### 6.6 Error handling (REQ-ERR)
 
@@ -969,8 +975,11 @@ built-in `vim.diff()` using `result_type="indices"`,
 `algorithm="histogram"`, `linematch=60`, and `indent_heuristic=true`.
 
 **REQ-RND-0002** (Ubiquitous): Within a changed hunk where old and new line
-counts permit, the system shall compute and highlight word/character-level
-intra-line differences using a pure-Lua token diff.
+counts permit, the system shall compute word/character-level intra-line
+differences using a pure-Lua token diff and highlight the differing tokens
+side-specifically: the new side with `CodeReviewIntraAdd` and the old side with
+`CodeReviewIntraDelete`, so changed words read as added (green) on the new side
+and removed (red) on the old.
 
 **REQ-RND-0003** (Ubiquitous): Each diff buffer shall have treesitter
 highlighting started via `vim.treesitter.start(buf, lang)` after its lines
@@ -1004,6 +1013,16 @@ previous-file navigation, the system shall switch the diff to the
 next/previous changed file (wrapping at the ends) and move focus into the
 new-side diff window, except on a pure-deletion file (no new-side content)
 where it shall focus the old-side window.
+
+**REQ-RND-0011** (Event-driven): When the diff switches to a file (on open,
+panel select, or next/previous navigation), the system shall mark that file's
+row in the panel with a persistent highlight (`CodeReviewPanelCurrent`) and move
+the panel cursor to it, so the file tree shows which file is displayed even
+while focus is in a diff window. Exactly one row is marked at a time.
+
+**REQ-RND-0012** (Event-driven): When a review is opened, the system shall place
+the cursor in the new-side diff window of the first file (the old-side window for
+a pure-deletion file), not in the file panel, so the reviewer starts on the code.
 
 ## 7. Verification Matrix
 
@@ -1041,7 +1060,7 @@ where it shall focus the old-side window.
 | REQ-UIX-0003  | TST-UIX-0003  | Manual   | Add comment, verify virtual text rendered with `CodeReviewComment` highlight |
 | REQ-UIX-0004  | TST-UIX-0004  | Manual   | Add comment, verify sign column shows `●` with `CodeReviewSign` highlight |
 | REQ-UIX-0005  | TST-UIX-0005  | Manual   | Override keybinding in setup, verify new binding works |
-| REQ-UIX-0006  | TST-UIX-0006  | Auto     | Add file-level comment, verify both a virtual line above line 1 and a sign on line 1 (extmark with `sign_text`) are present in the namespace |
+| REQ-UIX-0006  | TST-UIX-0006  | Auto     | Add a file-level comment, verify a 📄 sign extmark in the `code_review_panel` namespace on the file's panel row and a virtual line above line 1 of the diff buffer, with no file-comment sign on the diff buffer |
 | REQ-DIF-0007  | TST-DIF-0007  | Auto     | Start a working-tree review, verify both diff buffers have `modifiable = false` |
 | REQ-CMT-0010  | TST-CMT-0010  | Auto     | Open the comment input float, verify `vim.bo[buf].filetype` is `codereview` (not `markdown`) |
 | REQ-UIX-0007  | TST-UIX-0007  | Auto     | Quit Neovim without submitting, verify no review file created and exit code is 2 |
@@ -1064,8 +1083,9 @@ where it shall focus the old-side window.
 | REQ-UIX-0008  | TST-UIX-0008  | Auto     | Verify `vim.api.nvim_buf_get_keymap()` on a diff buffer contains the documented default keys (`<leader>Rc`, `<leader>Rs`, etc.) |
 | REQ-UIX-0009  | TST-UIX-0009  | Auto     | Trigger `:CodeReviewSubmit`, capture the summary float content, verify it includes the markdown preamble from section 4.7 |
 | REQ-UIX-0010  | TST-UIX-0010  | Auto     | Call `setup({ keymaps = { add_comment = false, delete_comment = false } })`, start a review, verify those keys are not bound on diff buffers while other defaults are |
+| REQ-UIX-0011  | TST-UIX-0011  | Manual   | Open the comment float on a line vs a file, verify the title reads "Line comment" / "File comment: <file>" and the float is larger |
 | REQ-RND-0001  | TST-RND-0001  | Auto     | Compute a line diff via the renderer, verify `vim.diff()` is called with `result_type="indices"`, `algorithm="histogram"`, `linematch=60`, `indent_heuristic=true` |
-| REQ-RND-0002  | TST-RND-0002  | Auto     | Render a changed hunk with a single edited line, verify word-level intra-line highlights are placed on the differing tokens |
+| REQ-RND-0002  | TST-RND-0002  | Auto     | Render a changed hunk with a single edited line, verify the differing tokens carry `CodeReviewIntraAdd` on the new side and `CodeReviewIntraDelete` on the old side |
 | REQ-RND-0003  | TST-RND-0003  | Auto     | Render a diff buffer for a known filetype, verify treesitter is active (`vim.treesitter.start` ran and the tree is non-empty) on the loaded buffer |
 | REQ-RND-0004  | TST-RND-0004  | Manual   | Render a diff with unbalanced add/delete counts, verify filler rows keep corresponding lines on the same screen row |
 | REQ-RND-0005  | TST-RND-0005  | Auto     | Render a diff buffer, verify `buftype=nofile`, `buflisted=false`, `bufhidden=wipe`, `modifiable=false`, and window `winfixbuf=true` |
@@ -1074,6 +1094,8 @@ where it shall focus the old-side window.
 | REQ-RND-0008  | TST-RND-0008  | Manual   | Scroll and move the cursor in one diff window, verify the other window stays in sync |
 | REQ-RND-0009  | TST-RND-0009  | Auto     | Place the cursor on a known diff row and add a comment, verify the resolved `{path, side, lineno}` matches the row→line mapping |
 | REQ-RND-0010  | TST-RND-0010  | Auto     | Invoke next/previous-file navigation, verify the current file advances (wrapping) and focus moves into the new-side window (old side for a pure-deletion file) |
+| REQ-RND-0011  | TST-RND-0011  | Auto     | Switch files, verify exactly one panel row carries a `CodeReviewPanelCurrent` extmark (the current file) and the panel cursor sits on it |
+| REQ-RND-0012  | TST-RND-0012  | Auto     | Open a review, verify the current window is the new-side diff window (old side for a pure-deletion file), not the panel |
 | REQ-LSP-0002  | TST-LSP-0002  | Auto     | Open the comment float and summary float, verify both have filetype `codereview` (covered by `test_12_float_filetype.sh`) |
 | REQ-LSP-0003  | TST-LSP-0003  | Auto     | Open the comment float, verify no LSPs are attached after the filetype is set |
 | REQ-RND-0005  | TST-LSP-0001  | Auto     | Start a review whose diff includes a `.md` file; assert no LSP client is attached to either diff buffer (consequence of `buftype=nofile`) |

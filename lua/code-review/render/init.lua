@@ -183,6 +183,12 @@ function M.open(diff_info, store, opts)
 
   if first then
     render_path(first)
+    -- Mark the first file as current in the panel, then drop the cursor into
+    -- its new-side diff window so the reviewer starts on the code, not the file
+    -- tree (REQ-RND-0011, REQ-RND-0012). focus_new_win runs last so it wins
+    -- over view.open's park-in-panel default.
+    panel.set_current(state.view, first)
+    focus_new_win()
   end
 
   return state.view
@@ -196,6 +202,9 @@ function M.switch_file(path)
   end
   render_path(path)
   render_panel()
+  -- Keep the panel selection in sync with the file now on screen. After
+  -- render_panel so the freshly-rendered line paths are in place (REQ-RND-0011).
+  panel.set_current(state.view, path)
 end
 
 -- Switch to the next changed file (wrapping past the last back to the first) and

@@ -316,6 +316,8 @@ function M.add_comment()
 
   ui.open_comment_float({
     prefill = prefill,
+    kind = "line",
+    path = file_path,
     on_confirm = function(body)
       -- Store both line numbers from the model row (set for context/modified
       -- lines, one nil for a pure add/delete). The store keys by the anchor
@@ -346,6 +348,8 @@ function M.add_file_comment()
 
   ui.open_comment_float({
     prefill = prefill,
+    kind = "file",
+    path = file_path,
     on_confirm = function(body)
       M._session.store:add_file_comment(file_path, body)
       render.repaint_comments()
