@@ -1,92 +1,213 @@
 #!/usr/bin/env bash
 # interactive-review-launch — hand off to Neovim for an interactive code review.
 #
-# Spawns Neovim inside a detached tmux session (Neovim needs a real PTY,
-# which Claude Code's Bash tool does not provide), auto-attaches the
-# session in a new iTerm2 tab when possible, polls for the result file,
-# and prints the review JSON on submit. When the review exits (submit or
-# cancel), the iTerm2 tab it opened is closed automatically.
+# Async-friendly. A review can run far longer than Claude Code's 10-minute
+# Bash-tool cap, so `start` spawns the review and returns a handle immediately
+# instead of blocking. The caller then polls `status <handle>` (one-shot) or
+# runs `wait <handle>` in the background to block until the review finishes.
 #
-# Usage:
-#   interactive-review-launch [<git-range>]
+# Subcommands:
+#   start [<git-range>]      spawn the review; print a HANDLE on stdout, exit 0
+#   status <handle>          one-shot check: exit 3=running, 0=done (review JSON
+#                            on stdout), 2=cancelled, 1/other=error
+#   wait <handle> [interval] block, polling every <interval>s (default 1), until
+#                            the review finishes; same completion semantics as
+#                            status. Intended to be run in the background.
+#   <git-range> | (nothing)  legacy: start + wait in one blocking call
 #
-# Exit codes mirror the plugin:
-#   0  review submitted (JSON printed on stdout)
+# When the review finishes, the iTerm2 tab opened for it is closed and the tmux
+# session + temp files are cleaned up. Frequent polling (the default 1s in
+# `wait`) means this happens promptly after the user submits or cancels.
+#
+# Exit codes (status / wait / legacy):
+#   0  submitted (review JSON printed on stdout)
+#   2  cancelled
 #   1  error (diagnostic on stderr)
-#   2  user cancelled
+#   3  still running (status only)
 #
 # Dependencies: bash, tmux, jq, nvim (+ the neovim-code-review plugin).
 # Optional: it2 CLI for automatic iTerm2 tab attachment.
 
 set -euo pipefail
 
-range="${1:-}"
+RUNNING_RC=3
 
-# Reject git ranges that contain shell or Vim metacharacters. Legitimate
-# revision specs (HEAD~3..HEAD, main...HEAD, @^) never include `|`, `"`,
-# `\`, or newline — but each of those would let an attacker break out of
-# the `-c "CodeReview <range>"` invocation below.
-case "$range" in
-  *[\|\"\\]*|*$'\n'*)
-    printf 'interactive-review-launch: refusing unsafe argument: %s\n' "$range" >&2
-    exit 1
-    ;;
-esac
+# Reject git ranges with shell or Vim metacharacters; legitimate revision specs
+# never contain `|`, `"`, `\`, or a newline, and each would break out of the
+# `-c "CodeReview <range>"` invocation below.
+reject_unsafe_range() {
+  case "$1" in
+    *[\|\"\\]*|*$'\n'*)
+      printf 'interactive-review-launch: refusing unsafe argument: %s\n' "$1" >&2
+      exit 1
+      ;;
+  esac
+}
 
-session="code-review-$$"
-result_file=$(mktemp "${TMPDIR:-/tmp}/nvim-code-review.XXXXXX")
-sentinel="${result_file}.done"
-tab_sid=""  # iTerm2 session id of the tab we open; closed on exit (review over)
-trap 'tmux kill-session -t "$session" 2>/dev/null; { [ -n "$tab_sid" ] && it2 session close -s "$tab_sid" -f; } >/dev/null 2>&1 || true; rm -f "$result_file" "$sentinel"' EXIT INT TERM HUP
+# Spawn a review. Sets HANDLE (= the result-file path) and writes <handle>.state
+# recording the tmux session and iTerm tab id. Diagnostics go to stderr; nothing
+# is written to stdout.
+spawn_review() {
+  local range="${1:-}"
+  reject_unsafe_range "$range"
 
-# Spawn nvim inside a detached tmux session so it gets a real PTY.
-tmux new-session -d -s "$session" -x 220 -y 60 \
-  "NVIM_CODE_REVIEW_RESULT='$result_file' nvim -c 'CodeReview $range'; echo \$? > '$sentinel'"
+  HANDLE=$(mktemp "${TMPDIR:-/tmp}/nvim-code-review.XXXXXX")
+  local base session sentinel
+  base=$(basename "$HANDLE")
+  # tmux treats `.` and `:` as target separators, so the session name must not
+  # contain the mktemp suffix's dot; map any non-safe char to `-`.
+  session="code-review-${base//[!A-Za-z0-9_]/-}"
+  sentinel="$HANDLE.done"
 
-# Auto-open a new iTerm2 tab and attach. Fall back to printing the
-# attach command for terminals without the it2 CLI.
-if command -v it2 >/dev/null 2>&1; then
-  it2 tab new >/dev/null
-  # The new tab is now the active session; capture its id so the EXIT trap can
-  # close the tab once the review finishes (the tab exists only for the review).
-  tab_sid=$(it2 session get-var id 2>/dev/null || true)
-  it2 session set-name "code review" >/dev/null 2>&1 || true
-  it2 run "tmux attach -t $session" >/dev/null
-  printf 'Review opened in a new iTerm2 tab (tmux session: %s).\n' "$session" >&2
-  printf 'Submit with <leader>Rs, cancel with <leader>Rq.\n' >&2
-else
-  printf 'Attach to the review with:  tmux attach -t %s\n' "$session" >&2
-  printf 'Then submit with <leader>Rs or cancel with <leader>Rq.\n' >&2
-fi
-
-# Poll for the sentinel file. 5-hour ceiling so long reviews are possible.
-start=$(date +%s)
-max_wait=18000  # 5 hours
-while [ ! -f "$sentinel" ]; do
-  sleep 0.5
-  now=$(date +%s)
-  if [ $((now - start)) -gt $max_wait ]; then
-    printf 'interactive-review-launch: timed out after %d seconds\n' "$max_wait" >&2
+  # Neovim needs a real PTY, which Claude Code's Bash tool does not provide, so
+  # run it inside a detached tmux session.
+  if ! tmux new-session -d -s "$session" -x 220 -y 60 \
+      "NVIM_CODE_REVIEW_RESULT='$HANDLE' nvim -c 'CodeReview $range'; echo \$? > '$sentinel'"; then
+    printf 'interactive-review-launch: failed to start the review session\n' >&2
+    rm -f "$HANDLE"
     exit 1
   fi
-done
 
-rc=$(cat "$sentinel")
-case "$rc" in
-  0)
-    review_path=$(cat "$result_file")
-    if [ -z "$review_path" ]; then
-      printf 'interactive-review-launch: empty result file\n' >&2
+  local tab_sid=""
+  if command -v it2 >/dev/null 2>&1; then
+    it2 tab new >/dev/null
+    tab_sid=$(it2 session get-var id 2>/dev/null || true)
+    it2 session set-name "code review" >/dev/null 2>&1 || true
+    it2 run "tmux attach -t $session" >/dev/null
+    printf 'Review opened in a new iTerm2 tab (tmux session: %s).\n' "$session" >&2
+  else
+    printf 'Attach to the review with:  tmux attach -t %s\n' "$session" >&2
+  fi
+  printf 'Submit with <leader>Rs, cancel with <leader>Rq.\n' >&2
+
+  {
+    printf 'session=%s\n' "$session"
+    printf 'tab_sid=%s\n' "$tab_sid"
+  } > "$HANDLE.state"
+}
+
+# Tear down the review's tmux session, iTerm tab, and temp files. Idempotent.
+cleanup_review() {
+  local handle="$1" session="" tab_sid="" k v
+  if [ -f "$handle.state" ]; then
+    # Parse key=value lines without sourcing (the state file is ours, but never
+    # eval file content).
+    while IFS='=' read -r k v; do
+      case "$k" in
+        session) session="$v" ;;
+        tab_sid) tab_sid="$v" ;;
+      esac
+    done < "$handle.state"
+  fi
+  [ -n "$session" ] && tmux kill-session -t "$session" 2>/dev/null || true
+  { [ -n "$tab_sid" ] && it2 session close -s "$tab_sid" -f; } >/dev/null 2>&1 || true
+  rm -f "$handle" "$handle.done" "$handle.state"
+}
+
+# One-shot poll. Returns RUNNING_RC if the review is not finished; otherwise
+# emits the result (JSON on submit), cleans up, and returns the review's exit
+# code (0 submit / 2 cancel / other error).
+poll_once() {
+  local handle="$1" sentinel="$1.done" rc review_path
+  [ -f "$sentinel" ] || return "$RUNNING_RC"
+  rc=$(cat "$sentinel" 2>/dev/null || echo 1)
+  case "$rc" in
+    0)
+      review_path=$(cat "$handle" 2>/dev/null || true)
+      if [ -z "$review_path" ] || [ ! -f "$review_path" ]; then
+        printf 'interactive-review-launch: empty result file\n' >&2
+        cleanup_review "$handle"
+        return 1
+      fi
+      jq . "$review_path"
+      cleanup_review "$handle"
+      return 0
+      ;;
+    2)
+      printf 'review cancelled\n' >&2
+      cleanup_review "$handle"
+      return 2
+      ;;
+    *)
+      printf 'neovim error (exit %s)\n' "$rc" >&2
+      cleanup_review "$handle"
+      return "${rc:-1}"
+      ;;
+  esac
+}
+
+require_handle() {
+  local handle="${1:-}"
+  if [ -z "$handle" ] || [ ! -f "$handle.state" ]; then
+    printf 'interactive-review-launch: unknown review handle: %s\n' "${handle:-<none>}" >&2
+    exit 1
+  fi
+}
+
+do_start() {
+  spawn_review "${1:-}"
+  printf '%s\n' "$HANDLE" # the handle: pass to `status` / `wait`
+}
+
+do_status() {
+  require_handle "${1:-}"
+  local rc=0
+  poll_once "$1" || rc=$?
+  if [ "$rc" = "$RUNNING_RC" ]; then
+    printf 'running\n' >&2
+  fi
+  exit "$rc"
+}
+
+# Block until the review finishes, polling every <interval>s. Exits with the
+# review's code.
+poll_loop() {
+  local handle="$1" interval="${2:-1}" start now max_wait=18000 rc
+  start=$(date +%s)
+  while true; do
+    rc=0
+    poll_once "$handle" || rc=$?
+    if [ "$rc" != "$RUNNING_RC" ]; then
+      exit "$rc"
+    fi
+    sleep "$interval"
+    now=$(date +%s)
+    if [ $((now - start)) -gt $max_wait ]; then
+      printf 'interactive-review-launch: timed out after %d seconds\n' "$max_wait" >&2
+      cleanup_review "$handle"
       exit 1
     fi
-    jq . "$review_path"
+  done
+}
+
+do_wait() {
+  require_handle "${1:-}"
+  poll_loop "$1" "${2:-1}"
+}
+
+do_legacy() {
+  # Backward-compatible blocking mode: spawn, then poll in this process. A trap
+  # tidies up on Ctrl-C / kill (poll_once already cleans up on completion).
+  spawn_review "${1:-}"
+  trap 'cleanup_review "$HANDLE"' EXIT INT TERM HUP
+  poll_loop "$HANDLE" 0.5
+}
+
+cmd="${1:-}"
+case "$cmd" in
+  start)
+    shift
+    do_start "${1:-}"
     ;;
-  2)
-    printf 'review cancelled\n' >&2
-    exit 2
+  status)
+    shift
+    do_status "${1:-}"
+    ;;
+  wait)
+    shift
+    do_wait "${1:-}" "${2:-1}"
     ;;
   *)
-    printf 'neovim error (exit %s)\n' "$rc" >&2
-    exit "$rc"
+    do_legacy "${1:-}"
     ;;
 esac
