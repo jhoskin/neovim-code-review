@@ -1,6 +1,6 @@
 NVIM ?= nvim
 
-.PHONY: test test-e2e unit health lint clean
+.PHONY: test test-e2e unit health lint trace clean
 
 # Launch Neovim with the minimal test config (interactive)
 test:
@@ -13,6 +13,10 @@ unit:
 # Run the end-to-end test suite (tmux-driven)
 test-e2e:
 	bash tests/e2e/run_all.sh
+
+# Spec-traceability gate: assert every requirement maps to a passing test
+trace:
+	$(NVIM) --headless -l tests/traceability.lua
 
 # Run health check in headless mode
 health:

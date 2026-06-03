@@ -261,4 +261,15 @@ function M.is_inside_work_tree()
   return M._git({ "rev-parse", "--is-inside-work-tree" }) == "true"
 end
 
+-- Number of commits in a resolved non-working_tree range (base..head). Returns
+-- nil for working_tree (no commit range) or if git fails. Used to detect a
+-- zero-commit range (REQ-ERR-0001).
+function M.range_commit_count(diff_info)
+  if diff_info.type == "working_tree" then
+    return nil
+  end
+  local out = M._git({ "rev-list", "--count", diff_info.base_sha .. ".." .. diff_info.head_sha })
+  return out and tonumber(out) or nil
+end
+
 return M

@@ -103,6 +103,26 @@ describe("render/diff.word_diff guards", function()
   end)
 end)
 
+-- ── render/diff uses the locked vim.diff options (TST-RND-0001) ────────────
+describe("render/diff vim.diff options", function()
+  it("calls vim.diff with histogram/linematch/indices/indent_heuristic", function()
+    local captured
+    local orig = vim.diff
+    vim.diff = function(a, b, opts)
+      captured = opts
+      return orig(a, b, opts)
+    end
+    local ok_run, err = pcall(render_diff.compute, { "a", "b" }, { "a", "x", "b" })
+    vim.diff = orig
+    ok(ok_run, "compute ran: " .. tostring(err))
+    ok(captured ~= nil, "vim.diff was called")
+    eq(captured.result_type, "indices")
+    eq(captured.algorithm, "histogram")
+    eq(captured.linematch, 60)
+    eq(captured.indent_heuristic, true)
+  end)
+end)
+
 -- ── render/paint comment edge cases ────────────────────────────────────────
 describe("render/paint comment edges", function()
   it("paints a deleted file's file comment on the old side", function()
@@ -141,6 +161,56 @@ describe("render/paint comment edges", function()
     paint.apply(view, m, store)
     local ns = vim.api.nvim_create_namespace(paint.NS_COMMENTS)
     ok(has_file_comment(new_buf, ns), "drifted comment still painted (clamped to nearest row)")
+  end)
+end)
+
+-- ── render/paint: incremental comment repaint keeps diff paint (fix #12) ───
+describe("render/paint.apply_comments isolation", function()
+  it("repaints only NS_COMMENTS, leaving the diff paint in NS intact", function()
+    local old_buf, new_buf = scratch_buf(), scratch_buf()
+    -- A change row guarantees diff paint (line bg + signs + intra) lands in NS.
+    local m = render_diff.compute({ "local x = 1", "keep" }, { "local x = 2", "keep" })
+    local view = { old_buf = old_buf, new_buf = new_buf, lang = "lua", path = "f.lua" }
+
+    paint.apply(view, m, { get_all = function() return {} end })
+    local ns = vim.api.nvim_create_namespace(paint.NS)
+    local before = #vim.api.nvim_buf_get_extmarks(new_buf, ns, 0, -1, {})
+    ok(before >= 1, "diff paint present in NS after apply")
+
+    -- A comment-only repaint must not disturb the NS diff marks.
+    paint.apply_comments(view, m, {
+      get_all = function()
+        return { { path = "f.lua", comment = "note", lines = {} } }
+      end,
+    }, "f.lua")
+
+    local after = #vim.api.nvim_buf_get_extmarks(new_buf, ns, 0, -1, {})
+    eq(after, before, "diff paint in NS is untouched by apply_comments")
+    local nsc = vim.api.nvim_create_namespace(paint.NS_COMMENTS)
+    ok(#vim.api.nvim_buf_get_extmarks(new_buf, nsc, 0, -1, {}) >= 1, "comment marker in NS_COMMENTS")
+  end)
+end)
+
+-- ── render/paint: treesitter stop-before-start on reused buffers (fix #6) ───
+describe("render/paint treesitter lifecycle", function()
+  it("stops the prior highlighter when switching to a no-language file", function()
+    local active = vim.treesitter.highlighter and vim.treesitter.highlighter.active
+    if not active then
+      return -- internal table unavailable on this Neovim; skip
+    end
+    local old_buf, new_buf = scratch_buf(), scratch_buf()
+    local view = { old_buf = old_buf, new_buf = new_buf, lang = "lua", path = "a.lua" }
+    paint.apply(view, render_diff.compute({ "local x = 1" }, { "local x = 2" }), { get_all = function() return {} end })
+    ok(vim.treesitter.highlighter.active[new_buf] ~= nil, "lua highlighter active after first apply")
+
+    -- Switch the reused buffer to a file with no treesitter language.
+    view.lang = nil
+    view.path = "b.txt"
+    paint.apply(view, render_diff.compute({ "plain" }, { "plain text" }), { get_all = function() return {} end })
+    H.assert.is_nil(
+      vim.treesitter.highlighter.active[new_buf],
+      "prior highlighter stopped when the new file has no language"
+    )
   end)
 end)
 
@@ -196,6 +266,31 @@ describe("code-review/diff rename and non-ASCII paths", function()
 
       local _, new_lines = diff.file_contents(info, "数据.txt")
       eq(new_lines, { "one", "two" }, "file_contents reads the non-ASCII path")
+    end)
+    rmrf(repo)
+  end)
+end)
+
+-- ── diff.range_commit_count (REQ-ERR-0001) ─────────────────────────────────
+describe("code-review/diff.range_commit_count", function()
+  it("counts commits in a range and reports zero for an empty one", function()
+    local repo = new_repo()
+    write_file(repo, "a.txt", "1\n")
+    git(repo, { "add", "-A" })
+    git(repo, { "commit", "-q", "-m", "c1" })
+    write_file(repo, "a.txt", "2\n")
+    git(repo, { "add", "-A" })
+    git(repo, { "commit", "-q", "-m", "c2" })
+
+    in_dir(repo, function()
+      local one = diff.resolve_shas(diff.parse_range("HEAD~1..HEAD"))
+      eq(diff.range_commit_count(one), 1, "one commit in HEAD~1..HEAD")
+
+      local zero = diff.resolve_shas(diff.parse_range("HEAD..HEAD"))
+      eq(diff.range_commit_count(zero), 0, "zero commits in HEAD..HEAD")
+
+      local wt = diff.resolve_shas(diff.parse_range(nil))
+      H.assert.is_nil(diff.range_commit_count(wt), "working_tree has no commit range")
     end)
     rmrf(repo)
   end)

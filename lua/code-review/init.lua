@@ -10,6 +10,11 @@ local M = {}
 
 M._session = nil
 
+-- Agent mode is signalled by the result-file env var the launcher sets.
+function M._agent_mode()
+  return vim.env.NVIM_CODE_REVIEW_RESULT ~= nil and vim.env.NVIM_CODE_REVIEW_RESULT ~= ""
+end
+
 function M.setup(opts)
   config.setup(opts)
 end
@@ -47,6 +52,13 @@ function M.start(range_str)
   local resolved, resolve_err = diff.resolve_shas(parsed)
   if not resolved then
     review.exit_error("invalid_range", resolve_err)
+    return
+  end
+
+  -- REQ-ERR-0001: a non-working_tree range that resolves to zero commits is an
+  -- error (there is nothing to review).
+  if resolved.type ~= "working_tree" and diff.range_commit_count(resolved) == 0 then
+    review.exit_error("empty_range", "range resolves to zero commits: " .. (range_str or ""))
     return
   end
 
@@ -274,9 +286,10 @@ function M.add_comment()
   ui.open_comment_float({
     prefill = prefill,
     on_confirm = function(body)
-      local old_lineno = side == "old" and lineno or nil
-      local new_lineno = side == "new" and lineno or nil
-      M._session.store:add_line_comment(file_path, old_lineno, new_lineno, side, body)
+      -- Store both line numbers from the model row (set for context/modified
+      -- lines, one nil for a pure add/delete). The store keys by the anchor
+      -- side, so `side` still selects the key.
+      M._session.store:add_line_comment(file_path, ctx.old_lineno, ctx.new_lineno, side, body)
       -- Comment-only repaint: just the markers + panel counts, no buffer refill.
       render.repaint_comments()
     end,
@@ -400,39 +413,30 @@ end
 function M._register_autocmds()
   local group = vim.api.nvim_create_augroup("code_review_session", { clear = true })
 
-  -- Closing the whole review (the last renderer window) ends the session; in
-  -- agent mode that is a cancel exit. A :q on a single pane while the other
-  -- renderer windows remain must NOT discard the review or exit the process.
-  vim.api.nvim_create_autocmd("QuitPre", {
+  -- A stray :q on one of the renderer panes just closes that window; nothing
+  -- cancels the review (no QuitPre handler). The review ends only on an
+  -- explicit submit/cancel/pause, or when Neovim actually exits (below).
+  --
+  -- Process-exit safety net: Neovim is quitting (any :q/:qall/:wq) with an
+  -- unsubmitted review and no explicit submit/cancel/error ran. Treat it as a
+  -- cancel; agent mode exits with code 2 (REQ-UIX-0007). This is the reliable
+  -- signal -- QuitPre cannot tell a single-pane :q from a full :qall. `cquit`
+  -- is a no-op this late in shutdown, so force the exit code with os.exit.
+  vim.api.nvim_create_autocmd("VimLeavePre", {
     group = group,
     callback = function()
       if not (M._session and not M._session.submitted) then
         return
       end
-      local render = require("code-review.render.init")
-      local wins = render.review_windows()
-      local cur = vim.api.nvim_get_current_win()
-      local is_review = false
-      for _, w in ipairs(wins) do
-        if w == cur then
-          is_review = true
-          break
-        end
-      end
-      -- Not a renderer window, or other renderer windows still open -> ignore.
-      if not is_review or #wins > 1 then
+      if review._exit_initiated then
         return
       end
-      local agent_mode = vim.env.NVIM_CODE_REVIEW_RESULT ~= nil
-        and vim.env.NVIM_CODE_REVIEW_RESULT ~= ""
+      local agent = M._agent_mode()
       M._cleanup()
-      -- Defer teardown out of the QuitPre callback (the window is mid-close).
-      vim.schedule(function()
-        render.close()
-        if agent_mode then
-          review.exit_cancel()
-        end
-      end)
+      if agent then
+        review._exit_initiated = true
+        os.exit(2)
+      end
     end,
   })
 end
