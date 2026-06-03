@@ -43,8 +43,22 @@ local SIGN_TEXT = {
   delete = "-",
 }
 
--- Intra-line word highlight group (links to a search-ish emphasis).
-local INTRA_HL = "CodeReviewIntra"
+-- Bright gutter-sign highlight per kind. Kept separate from the line-background
+-- groups so the +/~/- markers stay vivid even when the line background is only
+-- a subtle Diff* tint (REQ-RND-0006). config.lua owns the real definitions;
+-- ensure_highlights provides a fallback for the headless / no-setup path.
+local SIGN_HL = {
+  add = "CodeReviewAddSign",
+  change = "CodeReviewChangeSign",
+  delete = "CodeReviewDeleteSign",
+}
+
+-- Intra-line word highlight groups, one per side: changed words glow green on
+-- the new side and red on the old (REQ-RND-0002).
+local INTRA_HL = {
+  old = "CodeReviewIntraDelete",
+  new = "CodeReviewIntraAdd",
+}
 
 local highlights_defined = false
 
@@ -55,7 +69,15 @@ local function ensure_highlights()
   for group, link in pairs(LINE_HL_LINK) do
     vim.api.nvim_set_hl(0, group, { link = link, default = true })
   end
-  vim.api.nvim_set_hl(0, INTRA_HL, { link = "DiffText", default = true })
+  -- Fallbacks for the headless / no-setup() path. config._define_highlights
+  -- sets richer, background-aware values when the plugin is configured; with
+  -- default=true the already-set config values win, and a colorscheme wins
+  -- over both.
+  vim.api.nvim_set_hl(0, "CodeReviewIntraAdd", { link = "DiffText", default = true })
+  vim.api.nvim_set_hl(0, "CodeReviewIntraDelete", { link = "DiffText", default = true })
+  vim.api.nvim_set_hl(0, "CodeReviewAddSign", { link = "CodeReviewAdd", default = true })
+  vim.api.nvim_set_hl(0, "CodeReviewChangeSign", { link = "CodeReviewChange", default = true })
+  vim.api.nvim_set_hl(0, "CodeReviewDeleteSign", { link = "CodeReviewDelete", default = true })
   highlights_defined = true
 end
 
@@ -155,7 +177,7 @@ local function paint_side(buf, ns, model, side)
         vim.api.nvim_buf_set_extmark(buf, ns, i - 1, 0, {
           line_hl_group = hl,
           sign_text = SIGN_TEXT[kind],
-          sign_hl_group = hl,
+          sign_hl_group = SIGN_HL[kind] or hl,
         })
       end
     end
@@ -173,7 +195,7 @@ local function paint_side(buf, ns, model, side)
           vim.api.nvim_buf_set_extmark(buf, ns, i - 1, sb, {
             end_row = i - 1,
             end_col = eb,
-            hl_group = INTRA_HL,
+            hl_group = INTRA_HL[side],
           })
         end
       end
@@ -249,8 +271,11 @@ local function paint_comments(old_buf, new_buf, ns, model, store, path)
 
   for _, file in ipairs(store:get_all()) do
     if file.path == path then
-      -- File-level comment: virt_lines above row 1 + a sign on row 1, on the
-      -- side that holds the file (new normally, old for a deleted file).
+      -- File-level comment: a virt_lines block above row 1 on the side that
+      -- holds the file (new normally, old for a deleted file). The 📄 indicator
+      -- itself lives in the file panel now (panel.lua), not on this buffer's
+      -- gutter, so a reader scanning the tree sees which files carry a comment
+      -- without opening each one (REQ-UIX-0006).
       if file.comment and file.comment ~= "" then
         local buf = file_comment_buf(old_buf, new_buf, model)
         if buf and vim.api.nvim_buf_is_valid(buf) then
@@ -261,8 +286,6 @@ local function paint_comments(old_buf, new_buf, ns, model, store, path)
           vim.api.nvim_buf_set_extmark(buf, ns, 0, 0, {
             virt_lines = vlines,
             virt_lines_above = true,
-            sign_text = vim.g.code_review_file_sign or "📄",
-            sign_hl_group = "CodeReviewFileSign",
           })
         end
       end

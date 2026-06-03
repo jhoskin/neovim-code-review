@@ -196,6 +196,64 @@ describe("render/init orchestration", function()
     rmrf(repo)
   end)
 
+  -- Covers: TST-RND-0012 (focus the new-side buffer on load).
+  it("open drops the cursor into the new-side window, not the panel", function()
+    local repo = make_repo()
+    in_dir(repo, function()
+      local info = diff.resolve_shas(diff.parse_range(nil))
+      local view = render.open(info, Store.new())
+      eq(render.current_path(), "a.txt", "opens on the first file")
+      eq(vim.api.nvim_get_current_win(), view.new_win,
+        "cursor starts in the new-side diff window, not the file panel")
+      render.close()
+    end)
+    rmrf(repo)
+  end)
+
+  -- Covers: TST-RND-0011 (panel selection follows the current file).
+  it("switch_file marks the current file in the panel and moves the panel cursor", function()
+    local repo = make_repo()
+    in_dir(repo, function()
+      local info = diff.resolve_shas(diff.parse_range(nil))
+      local view = render.open(info, Store.new())
+      local ns = vim.api.nvim_create_namespace("code_review_panel_current")
+
+      -- 0-based panel rows carrying the current-file highlight.
+      local function current_rows()
+        local rows = {}
+        for _, mk in ipairs(vim.api.nvim_buf_get_extmarks(view.panel_buf, ns, 0, -1, { details = true })) do
+          if mk[4] and mk[4].line_hl_group == "CodeReviewPanelCurrent" then
+            rows[#rows + 1] = mk[2]
+          end
+        end
+        return rows
+      end
+
+      -- 0-based panel line index for a path.
+      local function panel_row(path)
+        for i, l in ipairs(vim.api.nvim_buf_get_lines(view.panel_buf, 0, -1, false)) do
+          if l:find(path, 1, true) then
+            return i - 1
+          end
+        end
+      end
+
+      render.switch_file("a.txt")
+      eq(current_rows(), { panel_row("a.txt") }, "exactly a.txt's row is highlighted")
+      eq(vim.api.nvim_win_get_cursor(view.panel_win)[1] - 1, panel_row("a.txt"),
+        "panel cursor sits on a.txt")
+
+      render.switch_file("b.txt")
+      eq(current_rows(), { panel_row("b.txt") },
+        "highlight moved to b.txt and only one row is marked")
+      eq(vim.api.nvim_win_get_cursor(view.panel_win)[1] - 1, panel_row("b.txt"),
+        "panel cursor followed to b.txt")
+
+      render.close()
+    end)
+    rmrf(repo)
+  end)
+
   it("focuses the old side when the file is a pure deletion (no new content)", function()
     local base = vim.fn.resolve(vim.fn.tempname())
     assert(vim.fn.mkdir(base, "p") == 1)
