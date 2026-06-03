@@ -397,6 +397,17 @@ function M._preflight()
     return "version"
   end
 
+  -- REQ-ERR-0008: the review is interactive, so it needs an attached UI. A
+  -- headless Neovim (`--headless`, no UI) cannot take comment input; fail fast
+  -- instead of opening an unusable session. (nvim_list_uis is the reliable
+  -- signal -- guess_handle(0) flips to "file" whenever stderr is redirected,
+  -- even with a UI attached.) The agent launcher runs a real TUI, so this does
+  -- not affect agent mode.
+  if #vim.api.nvim_list_uis() == 0 then
+    review.exit_error("no_ui", "no interactive UI (running headless); the review needs an interactive Neovim")
+    return "no_ui"
+  end
+
   if vim.fn.executable("git") ~= 1 then
     review.exit_error("no_git", "git is not available on PATH")
     return "git"

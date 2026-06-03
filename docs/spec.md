@@ -905,8 +905,12 @@ the minimum required version.
 that cannot be resolved by git, then the system shall exit with code 1 and print
 a diagnostic to stderr identifying the unresolvable revision.
 
-**REQ-ERR-0008** (Unwanted-behavior): If stdin is not a TTY, then the system
-shall exit with code 1 and print a diagnostic to stderr.
+**REQ-ERR-0008** (Unwanted-behavior): If Neovim is running without an
+interactive UI (headless, `nvim_list_uis()` empty), then the system shall exit
+with code 1 and print a diagnostic to stderr. The review is interactive and
+cannot collect comment input without an attached UI. (Stated as "stdin not a
+TTY" originally; `nvim_list_uis()` is the reliable signal because a redirected
+stderr alone flips stdin's handle type even with a UI attached.)
 
 ### 6.7 Session management (REQ-SES)
 
@@ -1041,7 +1045,7 @@ buffer and adds a comment, the system shall resolve the cursor row to
 | REQ-ERR-0004  | TST-ERR-0004  | Auto     | Make audit trail directory unwritable, verify exit code 1 and diagnostic to stderr |
 | REQ-ERR-0006  | TST-ERR-0006  | Auto     | Mock `vim.version()` to return 0.9, verify exit code 1 and version diagnostic |
 | REQ-ERR-0007  | TST-ERR-0007  | Auto     | Invoke with nonexistent branch name, verify exit code 1 and diagnostic naming the revision |
-| REQ-ERR-0008  | TST-ERR-0008  | Auto     | Invoke with stdin redirected from /dev/null, verify exit code 1 |
+| REQ-ERR-0008  | TST-ERR-0008  | Auto     | Invoke under `nvim --headless` (no UI), verify exit code 1 and stderr diagnostic |
 | REQ-SES-0001  | TST-SES-0001  | Manual   | Execute `:CodeReviewPause`, verify session file created in sessions directory and the diff view closed |
 | REQ-SES-0002  | TST-SES-0002  | Manual   | Execute `:CodeReviewSessions`, verify floating window lists saved sessions with range, count, and date |
 | REQ-SES-0003  | TST-SES-0003  | Auto     | Pause a session, read the session JSON, verify it contains comments, diff range, and timestamps |
