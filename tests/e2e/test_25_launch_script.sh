@@ -38,4 +38,21 @@ for unsafe in 'foo|bar' 'foo"bar' 'foo\bar' $'foo\nbar'; do
 done
 echo "Rejects unsafe inputs (|, \", \\, newline): PASS"
 
+# The Claude integration bundle is committed and installable.
+slash="$PLUGIN_ROOT/claude/commands/interactive-review.md"
+installer="$PLUGIN_ROOT/claude/install.sh"
+if [ ! -f "$slash" ]; then
+  echo "FAIL: slash command not committed at claude/commands/interactive-review.md"
+  exit 1
+fi
+if [ ! -x "$installer" ]; then
+  echo "FAIL: claude/install.sh missing or not executable"
+  exit 1
+fi
+if ! bash -n "$installer"; then
+  echo "FAIL: claude/install.sh has a syntax error"
+  exit 1
+fi
+echo "Claude integration bundle present (slash command + executable install.sh): PASS"
+
 echo "PASS: scripts/interactive-review-launch is well-formed"

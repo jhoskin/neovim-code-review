@@ -999,6 +999,12 @@ and cursor positions synchronized.
 buffer and adds a comment, the system shall resolve the cursor row to
 `{path, side, lineno}` via the renderer's row→line mapping.
 
+**REQ-RND-0010** (Event-driven): When the user invokes next-file or
+previous-file navigation, the system shall switch the diff to the
+next/previous changed file (wrapping at the ends) and move focus into the
+new-side diff window, except on a pure-deletion file (no new-side content)
+where it shall focus the old-side window.
+
 ## 7. Verification Matrix
 
 | Requirement   | Test ID       | Method   | Description |
@@ -1067,6 +1073,7 @@ buffer and adds a comment, the system shall resolve the cursor row to
 | REQ-RND-0007  | TST-RND-0007  | Manual   | Open the file panel, verify each file shows an M/A/D marker and comment-count; press `<CR>` on a file, verify the two diff buffers re-render for it |
 | REQ-RND-0008  | TST-RND-0008  | Manual   | Scroll and move the cursor in one diff window, verify the other window stays in sync |
 | REQ-RND-0009  | TST-RND-0009  | Auto     | Place the cursor on a known diff row and add a comment, verify the resolved `{path, side, lineno}` matches the row→line mapping |
+| REQ-RND-0010  | TST-RND-0010  | Auto     | Invoke next/previous-file navigation, verify the current file advances (wrapping) and focus moves into the new-side window (old side for a pure-deletion file) |
 | REQ-LSP-0002  | TST-LSP-0002  | Auto     | Open the comment float and summary float, verify both have filetype `codereview` (covered by `test_12_float_filetype.sh`) |
 | REQ-LSP-0003  | TST-LSP-0003  | Auto     | Open the comment float, verify no LSPs are attached after the filetype is set |
 | REQ-RND-0005  | TST-LSP-0001  | Auto     | Start a review whose diff includes a `.md` file; assert no LSP client is attached to either diff buffer (consequence of `buftype=nofile`) |
