@@ -4,7 +4,8 @@
 # Spawns Neovim inside a detached tmux session (Neovim needs a real PTY,
 # which Claude Code's Bash tool does not provide), auto-attaches the
 # session in a new iTerm2 tab when possible, polls for the result file,
-# and prints the review JSON on submit.
+# and prints the review JSON on submit. When the review exits (submit or
+# cancel), the iTerm2 tab it opened is closed automatically.
 #
 # Usage:
 #   interactive-review-launch [<git-range>]
@@ -35,7 +36,8 @@ esac
 session="code-review-$$"
 result_file=$(mktemp "${TMPDIR:-/tmp}/nvim-code-review.XXXXXX")
 sentinel="${result_file}.done"
-trap 'tmux kill-session -t "$session" 2>/dev/null; rm -f "$result_file" "$sentinel"' EXIT INT TERM HUP
+tab_sid=""  # iTerm2 session id of the tab we open; closed on exit (review over)
+trap 'tmux kill-session -t "$session" 2>/dev/null; { [ -n "$tab_sid" ] && it2 session close -s "$tab_sid" -f; } >/dev/null 2>&1 || true; rm -f "$result_file" "$sentinel"' EXIT INT TERM HUP
 
 # Spawn nvim inside a detached tmux session so it gets a real PTY.
 tmux new-session -d -s "$session" -x 220 -y 60 \
@@ -45,6 +47,9 @@ tmux new-session -d -s "$session" -x 220 -y 60 \
 # attach command for terminals without the it2 CLI.
 if command -v it2 >/dev/null 2>&1; then
   it2 tab new >/dev/null
+  # The new tab is now the active session; capture its id so the EXIT trap can
+  # close the tab once the review finishes (the tab exists only for the review).
+  tab_sid=$(it2 session get-var id 2>/dev/null || true)
   it2 session set-name "code review" >/dev/null 2>&1 || true
   it2 run "tmux attach -t $session" >/dev/null
   printf 'Review opened in a new iTerm2 tab (tmux session: %s).\n' "$session" >&2
