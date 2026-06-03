@@ -179,6 +179,11 @@ function M.open_comment_float(opts)
   vim.cmd("startinsert!")
 
   local function close()
+    -- Drop back to normal mode before the float goes away. The confirm key is
+    -- bound in insert mode (the user is typing the comment), so without this
+    -- the underlying diff/panel buffer is left in insert mode after the float
+    -- closes. Insert mode belongs only in the comment dialog.
+    vim.cmd("stopinsert")
     if vim.api.nvim_win_is_valid(win) then
       vim.api.nvim_win_close(win, true)
     end

@@ -749,6 +749,11 @@ the filetype is set.
 float with an empty body (no non-whitespace characters), then the system shall
 discard the comment and close the float without storing an extmark.
 
+**REQ-CMT-0011** (Event-driven): When the user confirms or cancels the comment
+input float, the system shall return the editor to normal mode. The confirm key
+is bound in insert mode, so closing the float shall drop insert mode rather than
+leave the underlying diff or panel buffer in insert mode.
+
 ### 6.3 File storage (REQ-STO)
 
 **REQ-STO-0001** (Event-driven): When the user submits a review, the system
@@ -1063,6 +1068,7 @@ a pure-deletion file), not in the file panel, so the reviewer starts on the code
 | REQ-UIX-0006  | TST-UIX-0006  | Auto     | Add a file-level comment, verify a 📄 sign extmark in the `code_review_panel` namespace on the file's panel row and a virtual line above line 1 of the diff buffer, with no file-comment sign on the diff buffer |
 | REQ-DIF-0007  | TST-DIF-0007  | Auto     | Start a working-tree review, verify both diff buffers have `modifiable = false` |
 | REQ-CMT-0010  | TST-CMT-0010  | Auto     | Open the comment input float, verify `vim.bo[buf].filetype` is `codereview` (not `markdown`) |
+| REQ-CMT-0011  | TST-CMT-0011  | Auto     | Open a comment float, type a note, confirm with the confirm key, verify the editor is back in normal mode (`nvim_get_mode().mode == "n"`), not insert |
 | REQ-UIX-0007  | TST-UIX-0007  | Auto     | Quit Neovim without submitting, verify no review file created and exit code is 2 |
 | REQ-ERR-0001  | TST-ERR-0001  | Auto     | Invoke with empty range, verify exit code 1 and stderr message |
 | REQ-ERR-0002  | TST-ERR-0002  | Auto     | Remove git from PATH, invoke, verify exit code 1 |
