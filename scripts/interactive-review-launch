@@ -24,10 +24,15 @@
 #   wait <handle> [interval] block, polling every <interval>s (default 1), until
 #                            the review finishes; same completion semantics as
 #                            status. Intended to be run in the background.
+#   gc                       reap orphaned reviews (sessions/files/sockets left
+#                            by a start that was never reaped). Runs
+#                            automatically before each `start`; also runnable on
+#                            demand or from cron/launchd.
 #   <git-range> | (nothing)  legacy: start + wait in one blocking call
 #
 # When the review reaches a terminal state, the iTerm2 tab, the tmux session,
-# and the temp files are cleaned up.
+# and the temp files are cleaned up. Anything missed (a start that was never
+# waited on) is reaped by the next `start`'s sweep or an explicit `gc`.
 #
 # Exit codes (status / wait / legacy):
 #   0  submitted (review JSON printed on stdout)
@@ -42,6 +47,13 @@
 set -euo pipefail
 
 RUNNING_RC=3
+
+# All per-review artifacts (result file, sentinel, state, tmux socket) live in
+# one fixed directory so a sweep can find them regardless of $TMPDIR. Reviews
+# older than CR_GC_MAX_AGE are reaped (abandoned, or a marathon beyond the wait
+# ceiling); dead sockets are removed. Both are env-overridable.
+WORKDIR="${CR_REVIEW_DIR:-/tmp/code-review-launch}"
+GC_MAX_AGE="${CR_GC_MAX_AGE:-21600}" # 6h
 
 # Reject git ranges with shell or Vim metacharacters; legitimate revision specs
 # never contain `|`, `"`, `\`, or a newline, and each would break out of the
@@ -62,7 +74,11 @@ spawn_review() {
   local range="${1:-}"
   reject_unsafe_range "$range"
 
-  HANDLE=$(mktemp "${TMPDIR:-/tmp}/nvim-code-review.XXXXXX")
+  mkdir -p "$WORKDIR"
+  chmod 700 "$WORKDIR" 2>/dev/null || true
+  gc_sweep # reap orphans from past runs before starting a new review
+
+  HANDLE=$(mktemp "$WORKDIR/review.XXXXXX")
   local base session sentinel sock
   base=$(basename "$HANDLE")
   # tmux treats `.` and `:` as target separators, so the session name must not
@@ -73,9 +89,9 @@ spawn_review() {
   # server the attach (iTerm tab, or a manual command) connects to. Without it,
   # when the launcher runs in an environment whose $TMUX / $TMUX_TMPDIR differs
   # from the attaching terminal's, the session lands on one server and `tmux
-  # attach` looks at another -> "no sessions". The socket lives in /tmp (not
-  # $TMPDIR) so both sides resolve the same path.
-  sock="/tmp/cr-${session}.sock"
+  # attach` looks at another -> "no sessions". The socket lives in the fixed
+  # WORKDIR so both sides resolve the same path.
+  sock="$WORKDIR/${session}.sock"
 
   # Neovim needs a real PTY, which Claude Code's Bash tool does not provide, so
   # run it inside a detached tmux session on our own socket. `env -u TMUX` keeps
@@ -100,10 +116,32 @@ spawn_review() {
   printf 'Submit with <leader>Rs, cancel with <leader>Rq.\n' >&2
 
   {
+    printf 'started=%s\n' "$(date +%s)"
     printf 'session=%s\n' "$session"
     printf 'tab_sid=%s\n' "$tab_sid"
     printf 'sock=%s\n' "$sock"
   } > "$HANDLE.state"
+}
+
+# Reap orphaned reviews: anything started more than GC_MAX_AGE ago (abandoned
+# files/sockets, a session never reaped, or a marathon past the wait ceiling),
+# plus dead sockets with no live server. Race-free: a review younger than
+# GC_MAX_AGE is never touched, so an in-flight wait is never undercut.
+gc_sweep() {
+  local state handle started now s
+  now=$(date +%s)
+  for state in "$WORKDIR"/review.*.state; do
+    [ -e "$state" ] || continue
+    handle="${state%.state}"
+    started=$(sed -n 's/^started=//p' "$state")
+    if [ -z "$started" ] || [ $((now - started)) -gt "$GC_MAX_AGE" ]; then
+      cleanup_review "$handle"
+    fi
+  done
+  for s in "$WORKDIR"/*.sock; do
+    [ -e "$s" ] || continue
+    tmux -S "$s" list-sessions >/dev/null 2>&1 || rm -f "$s"
+  done
 }
 
 # Read <handle>.state into STATE_SESSION / STATE_SOCK / STATE_TAB_SID (empty if
@@ -249,6 +287,12 @@ do_legacy() {
   poll_loop "$HANDLE" 0.5
 }
 
+do_gc() {
+  mkdir -p "$WORKDIR" 2>/dev/null || true
+  gc_sweep
+  printf 'gc: swept reviews older than %ss in %s\n' "$GC_MAX_AGE" "$WORKDIR" >&2
+}
+
 cmd="${1:-}"
 case "$cmd" in
   start)
@@ -262,6 +306,9 @@ case "$cmd" in
   wait)
     shift
     do_wait "${1:-}" "${2:-1}"
+    ;;
+  gc)
+    do_gc
     ;;
   *)
     do_legacy "${1:-}"
