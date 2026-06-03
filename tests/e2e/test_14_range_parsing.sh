@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Test 14: parse_range produces correct DiffviewOpen args for each range format
+# Test 14: parse_range resolves each range format to the right type/base/head
 # Covers: TST-DIF-0002, TST-DIF-0003, TST-DIF-0004, TST-DIF-0005
 # Covers REQ-DIF-0002, REQ-DIF-0003, REQ-DIF-0004, REQ-DIF-0005
 set -euo pipefail
@@ -14,21 +14,23 @@ echo "Test repo: $repo"
 cat > /tmp/cr-range-check.lua <<'EOF'
 local diff = require('code-review.diff')
 
+-- Each case asserts the resolved (type, base, head) the git-read layer uses.
+-- A single revision becomes <rev>^..<rev>; two-dot is a commit range; three-dot
+-- is a branch review (base resolves to the merge-base downstream).
 local cases = {
-  { input = '',           expected = '' },
-  { input = 'HEAD~1',     expected = 'HEAD~1^..HEAD~1' },
-  { input = 'HEAD~1..HEAD',  expected = 'HEAD~1..HEAD' },
-  { input = 'HEAD~1...HEAD', expected = 'HEAD~1...HEAD' },
+  { input = '',              type = 'working_tree', base = nil,      head = nil },
+  { input = 'HEAD~1',        type = 'commit_range', base = 'HEAD~1^', head = 'HEAD~1' },
+  { input = 'HEAD~1..HEAD',  type = 'commit_range', base = 'HEAD~1',  head = 'HEAD' },
+  { input = 'HEAD~1...HEAD', type = 'branch',       base = 'HEAD~1',  head = 'HEAD' },
 }
 
 local lines = {}
 for _, c in ipairs(cases) do
   local parsed = diff.parse_range(c.input ~= '' and c.input or nil)
-  local got = parsed.diffview_args
-  local ok = got == c.expected
+  local ok = parsed.type == c.type and parsed.base == c.base and parsed.head == c.head
   table.insert(lines, string.format(
-    'input=%q expected=%q got=%q type=%s ok=%s',
-    c.input, c.expected, got, tostring(parsed.type), tostring(ok)
+    'input=%q type=%s base=%s head=%s ok=%s',
+    c.input, tostring(parsed.type), tostring(parsed.base), tostring(parsed.head), tostring(ok)
   ))
 end
 
@@ -52,7 +54,7 @@ cat /tmp/cr-range-check.txt
 echo "--- end ---"
 
 if grep -q 'ok=false' /tmp/cr-range-check.txt; then
-  echo "FAIL: one or more range cases produced wrong diffview_args"
+  echo "FAIL: one or more range cases resolved to the wrong type/base/head"
   exit 1
 fi
 
@@ -63,4 +65,4 @@ if [ "$n" != "4" ]; then
   exit 1
 fi
 
-echo "PASS: parse_range produces correct DiffviewOpen args for all 4 range formats"
+echo "PASS: parse_range resolves all 4 range formats to the right type/base/head"

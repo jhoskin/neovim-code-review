@@ -7,9 +7,11 @@
 -- fills the buffers and lays the extmarks.
 --
 -- This module holds the only mutable session state: the diff_info, the store,
--- a per-path model cache, and the live view handle. The comment layer calls
--- M.cursor_context() to anchor a comment to a file line (REQ-RND-0009),
--- replacing diffview's infer_cur_file. See render/CONTRACT.md "Orchestration".
+-- the changed-files list, a per-path model cache, and the live view handle. The
+-- comment layer calls M.cursor_context() to anchor a comment to a file line
+-- (REQ-RND-0009), replacing diffview's infer_cur_file. The view is filled in one
+-- place (paint.apply); the orchestrator never round-trips lines through the
+-- view's content provider. See render/CONTRACT.md "Orchestration".
 
 local diff = require("code-review.diff")
 local render_diff = require("code-review.render.diff")
@@ -24,31 +26,24 @@ local M = {}
 local state = {
   diff_info = nil,
   store = nil,
+  files = {}, -- changed-files list (FileEntry[]) for the panel
+  file_meta = {}, -- path -> old_path (for renames; nil otherwise)
   models = {}, -- path -> diff model ({ rows = ... })
   view = nil,
   current_path = nil, -- path of the file currently shown in the diff windows
 }
 
--- Aligned per-side buffer lines from a model: one visual line per row, "" for a
--- filler. Mirrors paint.side_lines so the view shows aligned content the instant
--- show_file runs (paint.apply re-sets the same lines a moment later).
-local function aligned_lines(model)
-  local old, new = {}, {}
-  for i, row in ipairs(model.rows) do
-    old[i] = row.old_text or ""
-    new[i] = row.new_text or ""
-  end
-  return old, new
-end
-
 -- Model for a path: cached, else computed from the git read layer. The cache is
 -- what cursor_context maps against, so it must hold the same model paint drew.
+-- file_meta[path] carries the pre-rename name so the old side reads the right
+-- blob (else a rename renders as an all-additions diff).
 local function model_for(path)
   local m = state.models[path]
   if m then
     return m
   end
-  local old_lines, new_lines = diff.file_contents(state.diff_info, path)
+  local old_lines, new_lines =
+    diff.file_contents(state.diff_info, path, state.file_meta[path])
   m = render_diff.compute(old_lines, new_lines)
   state.models[path] = m
   return m
@@ -69,18 +64,22 @@ local function detect_lang(path)
   return ft
 end
 
--- The view's content provider: hand it a path, get aligned old/new line arrays.
--- A stable function reference (it reads `state`), so it survives a reset.
-local function content_provider(path)
-  return aligned_lines(model_for(path))
+-- Re-render the file panel from the current files + store. Cheap, and it is the
+-- only place the per-file comment-count markers refresh, so it must run after
+-- navigation and after a comment is added or deleted.
+local function render_panel()
+  if state.view and state.files then
+    panel.render(state.view, state.files, state.store)
+  end
 end
 
--- Render one file into the view: compute/replay the model, swap the buffers to
--- it, set the language for treesitter, then paint. Returns the model.
+-- Render one file into the view: compute/replay the model, point the view at the
+-- path (rename buffers, reset cursor), set the language for treesitter, then
+-- paint. paint.apply is the single buffer fill. Returns the model.
 local function render_path(path)
   local model = model_for(path)
   state.view.lang = detect_lang(path)
-  state.view:show_file(path)
+  state.view:set_path(path)
   paint.apply(state.view, model, state.store)
   state.current_path = path
   return model
@@ -107,14 +106,20 @@ function M.open(diff_info, store, opts)
   state.models = {}
 
   local files = diff.changed_files(diff_info)
+  state.files = files
+  state.file_meta = {}
+  for _, entry in ipairs(files) do
+    if entry.old_path then
+      state.file_meta[entry.path] = entry.old_path
+    end
+  end
   local first = files[1] and files[1].path or nil
 
-  state.view = view_mod.open(diff_info, {
-    content_provider = content_provider,
-    first_file = first,
-  })
+  -- No content provider: paint.apply fills the diff buffers (render_path). The
+  -- view only lays out windows and tracks the path.
+  state.view = view_mod.open(diff_info, { first_file = first })
 
-  panel.render(state.view, files, store)
+  render_panel()
   panel.setup_keymaps(state.view, function(path)
     M.switch_file(path)
   end)
@@ -143,12 +148,41 @@ function M.open(diff_info, store, opts)
   return state.view
 end
 
--- Switch the visible file: replay its model, swap buffers, repaint.
+-- Switch the visible file: replay its model, swap buffers, repaint, and refresh
+-- the panel (so its comment-count markers reflect the store).
 function M.switch_file(path)
   if not (state.view and path) then
     return
   end
   render_path(path)
+  render_panel()
+end
+
+-- Repaint just the comment markers for the current file from the store, plus the
+-- panel counts. The cheap path after a comment add/delete: no buffer refill, no
+-- treesitter restart, no diff repaint (unlike switch_file).
+function M.repaint_comments()
+  if not (state.view and state.current_path) then
+    return
+  end
+  local model = model_for(state.current_path)
+  paint.apply_comments(state.view, model, state.store, state.current_path)
+  render_panel()
+end
+
+-- The renderer's still-open windows (panel + both diff windows). The session
+-- lifecycle uses this to tell a single-pane :q from closing the whole review.
+function M.review_windows()
+  if not state.view then
+    return {}
+  end
+  local wins = {}
+  for _, w in ipairs({ state.view.old_win, state.view.new_win, state.view.panel_win }) do
+    if w and vim.api.nvim_win_is_valid(w) then
+      wins[#wins + 1] = w
+    end
+  end
+  return wins
 end
 
 -- Tear down the view and clear all session state.
@@ -161,6 +195,8 @@ function M.close()
   state.view = nil
   state.diff_info = nil
   state.store = nil
+  state.files = {}
+  state.file_meta = {}
   state.models = {}
   state.current_path = nil
 end
@@ -183,10 +219,18 @@ function M.diff_hunk(path, side, lineno, ctx)
   if not model then
     return ""
   end
-  -- Find the row holding the commented line on the given side.
+  -- Find the row holding the commented line on the given side. Explicit branch,
+  -- NOT `side == "old" and row.old_lineno or row.new_lineno`: that idiom falls
+  -- through to new_lineno on any old-side filler/add row, so an add row whose
+  -- new_lineno equals the target old lineno would match the wrong row.
   local target
   for i, row in ipairs(model.rows) do
-    local ln = side == "old" and row.old_lineno or row.new_lineno
+    local ln
+    if side == "old" then
+      ln = row.old_lineno
+    else
+      ln = row.new_lineno
+    end
     if ln == lineno then
       target = i
       break
@@ -273,7 +317,16 @@ function M.cursor_context()
     return nil
   end
 
-  return { path = cur.path, side = cur.side, lineno = lineno }
+  -- Carry BOTH line numbers from the model row. For a context or modified row
+  -- both are set; the spec requires both populated for such comments (3.2 line
+  -- number invariants). `lineno` stays the anchor-side number (the store key).
+  return {
+    path = cur.path,
+    side = cur.side,
+    lineno = lineno,
+    old_lineno = row.old_lineno,
+    new_lineno = row.new_lineno,
+  }
 end
 
 return M

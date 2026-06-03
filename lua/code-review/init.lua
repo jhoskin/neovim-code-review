@@ -10,6 +10,11 @@ local M = {}
 
 M._session = nil
 
+-- Agent mode is signalled by the result-file env var the launcher sets.
+function M._agent_mode()
+  return vim.env.NVIM_CODE_REVIEW_RESULT ~= nil and vim.env.NVIM_CODE_REVIEW_RESULT ~= ""
+end
+
 function M.setup(opts)
   config.setup(opts)
 end
@@ -47,6 +52,13 @@ function M.start(range_str)
   local resolved, resolve_err = diff.resolve_shas(parsed)
   if not resolved then
     review.exit_error("invalid_range", resolve_err)
+    return
+  end
+
+  -- REQ-ERR-0001: a non-working_tree range that resolves to zero commits is an
+  -- error (there is nothing to review).
+  if resolved.type ~= "working_tree" and diff.range_commit_count(resolved) == 0 then
+    review.exit_error("empty_range", "range resolves to zero commits: " .. (range_str or ""))
     return
   end
 
@@ -274,11 +286,12 @@ function M.add_comment()
   ui.open_comment_float({
     prefill = prefill,
     on_confirm = function(body)
-      local old_lineno = side == "old" and lineno or nil
-      local new_lineno = side == "new" and lineno or nil
-      M._session.store:add_line_comment(file_path, old_lineno, new_lineno, side, body)
-      -- Cheapest correct repaint: re-render the current file from the store.
-      render.switch_file(file_path)
+      -- Store both line numbers from the model row (set for context/modified
+      -- lines, one nil for a pure add/delete). The store keys by the anchor
+      -- side, so `side` still selects the key.
+      M._session.store:add_line_comment(file_path, ctx.old_lineno, ctx.new_lineno, side, body)
+      -- Comment-only repaint: just the markers + panel counts, no buffer refill.
+      render.repaint_comments()
     end,
   })
 end
@@ -304,7 +317,7 @@ function M.add_file_comment()
     prefill = prefill,
     on_confirm = function(body)
       M._session.store:add_file_comment(file_path, body)
-      render.switch_file(file_path)
+      render.repaint_comments()
     end,
   })
 end
@@ -322,7 +335,7 @@ function M.delete_comment()
   local file_path, side, lineno = ctx.path, ctx.side, ctx.lineno
 
   if M._session.store:delete_line_comment(file_path, lineno, side) then
-    render.switch_file(file_path)
+    render.repaint_comments()
   end
 end
 
@@ -384,6 +397,17 @@ function M._preflight()
     return "version"
   end
 
+  -- REQ-ERR-0008: the review is interactive, so it needs an attached UI. A
+  -- headless Neovim (`--headless`, no UI) cannot take comment input; fail fast
+  -- instead of opening an unusable session. (nvim_list_uis is the reliable
+  -- signal -- guess_handle(0) flips to "file" whenever stderr is redirected,
+  -- even with a UI attached.) The agent launcher runs a real TUI, so this does
+  -- not affect agent mode.
+  if #vim.api.nvim_list_uis() == 0 then
+    review.exit_error("no_ui", "no interactive UI (running headless); the review needs an interactive Neovim")
+    return "no_ui"
+  end
+
   if vim.fn.executable("git") ~= 1 then
     review.exit_error("no_git", "git is not available on PATH")
     return "git"
@@ -400,20 +424,29 @@ end
 function M._register_autocmds()
   local group = vim.api.nvim_create_augroup("code_review_session", { clear = true })
 
-  -- Closing the review windows (e.g. :q in the renderer tab) ends the session.
-  -- In agent mode that means a cancel exit.
-  vim.api.nvim_create_autocmd("QuitPre", {
+  -- A stray :q on one of the renderer panes just closes that window; nothing
+  -- cancels the review (no QuitPre handler). The review ends only on an
+  -- explicit submit/cancel/pause, or when Neovim actually exits (below).
+  --
+  -- Process-exit safety net: Neovim is quitting (any :q/:qall/:wq) with an
+  -- unsubmitted review and no explicit submit/cancel/error ran. Treat it as a
+  -- cancel; agent mode exits with code 2 (REQ-UIX-0007). This is the reliable
+  -- signal -- QuitPre cannot tell a single-pane :q from a full :qall. `cquit`
+  -- is a no-op this late in shutdown, so force the exit code with os.exit.
+  vim.api.nvim_create_autocmd("VimLeavePre", {
     group = group,
     callback = function()
-      if M._session and not M._session.submitted then
-        local agent_mode = vim.env.NVIM_CODE_REVIEW_RESULT ~= nil
-          and vim.env.NVIM_CODE_REVIEW_RESULT ~= ""
-        M._cleanup()
-        if agent_mode then
-          vim.schedule(function()
-            review.exit_cancel()
-          end)
-        end
+      if not (M._session and not M._session.submitted) then
+        return
+      end
+      if review._exit_initiated then
+        return
+      end
+      local agent = M._agent_mode()
+      M._cleanup()
+      if agent then
+        review._exit_initiated = true
+        os.exit(2)
       end
     end,
   })

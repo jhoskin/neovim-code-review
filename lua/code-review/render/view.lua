@@ -129,8 +129,12 @@ function M.open(diff_info, opts)
   self.registry[old_win] = { side = "old", path = first }
   self.registry[new_win] = { side = "new", path = first }
 
-  if first then
+  if first and self.content_provider then
     self:show_file(first)
+  elseif first then
+    -- No content provider: the orchestrator fills the buffers via paint.apply,
+    -- so just set the buffer names / registry without an extra empty fill.
+    self:set_path(first)
   end
 
   -- Park the cursor back in the panel by default.
@@ -141,25 +145,15 @@ function M.open(diff_info, opts)
   return self
 end
 
--- Swap the two diff buffers' content for a new file. Reuses the same buffers
--- (REQ-RND-0005 + CONTRACT: never recreate, just refill). Toggles modifiable
--- around the set_lines; renames the buffers; updates the registry. The actual
--- line arrays come from the content provider (paint/test owns compute).
-function View:show_file(path)
+-- Path bookkeeping for a file swap, WITHOUT touching buffer content: rename the
+-- two reused diff buffers, repoint the registry, and reset both diff windows to
+-- the top of the file. The orchestrator calls this and lets paint.apply do the
+-- single buffer fill (so the buffers are not filled twice per switch).
+function View:set_path(path)
   self.path = path
 
-  local old_lines, new_lines = {}, {}
-  if self.content_provider then
-    old_lines, new_lines = self.content_provider(path)
-    old_lines = old_lines or {}
-    new_lines = new_lines or {}
-  end
-
-  set_buf_lines(self.old_buf, old_lines)
-  set_buf_lines(self.new_buf, new_lines)
-
   -- Rename to reflect the current path (names must be unique within the tab;
-  -- clear the sibling rename collision by allowing pcall to swallow dupes).
+  -- the pcall swallows a transient rename collision on the reused buffers).
   pcall(vim.api.nvim_buf_set_name, self.old_buf, "code-review://old/" .. path)
   pcall(vim.api.nvim_buf_set_name, self.new_buf, "code-review://new/" .. path)
 
@@ -170,6 +164,32 @@ function View:show_file(path)
   if self.new_win and self.registry[self.new_win] then
     self.registry[self.new_win].path = path
   end
+
+  -- Reset both diff windows to line 1 so a comment added right after a switch
+  -- anchors to a visible row, not one clamped down from the previous file.
+  for _, win in ipairs({ self.old_win, self.new_win }) do
+    if win and vim.api.nvim_win_is_valid(win) then
+      pcall(vim.api.nvim_win_set_cursor, win, { 1, 0 })
+    end
+  end
+end
+
+-- Swap the two diff buffers' content for a new file. Reuses the same buffers
+-- (REQ-RND-0005 + CONTRACT: never recreate, just refill). The line arrays come
+-- from the content provider; the orchestrator instead uses set_path + paint to
+-- fill once. Tests drive this directly with a fake provider.
+function View:show_file(path)
+  self:set_path(path)
+
+  local old_lines, new_lines = {}, {}
+  if self.content_provider then
+    old_lines, new_lines = self.content_provider(path)
+    old_lines = old_lines or {}
+    new_lines = new_lines or {}
+  end
+
+  set_buf_lines(self.old_buf, old_lines)
+  set_buf_lines(self.new_buf, new_lines)
 end
 
 -- Resolve the current cursor position to { path, side, win, buf } using the

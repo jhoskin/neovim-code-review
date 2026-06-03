@@ -13,7 +13,12 @@
 
 local M = {}
 
+-- Two namespaces: structural diff paint (line backgrounds, gutter signs,
+-- intra-line word spans) lives in NS; comment markers live in NS_COMMENTS. The
+-- split lets a comment add/delete repaint only the comment marks (apply_comments)
+-- without refilling buffers, restarting treesitter, or redrawing the diff.
 M.NS = "code_review_render"
+M.NS_COMMENTS = "code_review_comments"
 
 -- Highlight groups for line backgrounds. Defined locally with default=true so
 -- a user colorscheme can still override them; linked to the standard diff
@@ -113,8 +118,13 @@ local function set_buf_lines(buf, lines)
   return true
 end
 
--- Start treesitter on a loaded buffer. Must run AFTER lines are set.
+-- Start treesitter on a loaded buffer. Must run AFTER lines are set. The two
+-- diff buffers are reused across files, so stop any prior highlighter first:
+-- otherwise switching from a parsed file (e.g. .lua) to one with no parser
+-- (plain .txt, or a missing language) leaves the previous file's highlighter
+-- painting its language onto the new content.
 local function start_treesitter(buf, lang)
+  pcall(vim.treesitter.stop, buf)
   if not lang then
     return
   end
@@ -173,18 +183,60 @@ end
 
 -- Map a stored comment to a buffer row index (1-based) on each side. The
 -- comment store keys by {side, lineno}; we invert the model to find the
--- visual row whose old/new lineno matches.
+-- visual row whose old/new lineno matches. Also returns the max lineno seen on
+-- each side so a comment whose line is no longer in the model can be clamped.
 local function lineno_to_row(model)
   local old_idx, new_idx = {}, {}
+  local old_max, new_max = 0, 0
   for i, row in ipairs(model.rows) do
     if row.old_lineno ~= nil then
       old_idx[row.old_lineno] = i
+      if row.old_lineno > old_max then
+        old_max = row.old_lineno
+      end
     end
     if row.new_lineno ~= nil then
       new_idx[row.new_lineno] = i
+      if row.new_lineno > new_max then
+        new_max = row.new_lineno
+      end
     end
   end
-  return old_idx, new_idx
+  return old_idx, new_idx, old_max, new_max
+end
+
+-- Resolve a comment's lineno to a visual row. On an exact hit, that row. When
+-- the line is no longer in the model (the file changed between pause and resume
+-- of a working-tree review), anchor to the nearest existing line at or below it
+-- so the comment stays visible instead of silently vanishing.
+local function resolve_comment_row(idx_map, lineno, max_lineno)
+  if not lineno then
+    return nil
+  end
+  local row = idx_map[lineno]
+  if row then
+    return row
+  end
+  local ln = math.min(lineno, max_lineno)
+  while ln >= 1 do
+    if idx_map[ln] then
+      return idx_map[ln]
+    end
+    ln = ln - 1
+  end
+  return nil
+end
+
+-- The buffer to carry a file-level comment marker: the new side normally, but a
+-- deleted file has no new content, so fall back to the old side that actually
+-- shows the file (REQ-UIX-0006). Driven by the model, not buffer line counts.
+local function file_comment_buf(old_buf, new_buf, model)
+  for _, row in ipairs(model.rows) do
+    if row.new_lineno ~= nil then
+      return new_buf
+    end
+  end
+  return old_buf
 end
 
 -- Paint comment markers (sign + virt_lines) from the store onto the diff
@@ -193,14 +245,14 @@ local function paint_comments(old_buf, new_buf, ns, model, store, path)
   if not (store and type(store.get_all) == "function") then
     return
   end
-  local old_idx, new_idx = lineno_to_row(model)
+  local old_idx, new_idx, old_max, new_max = lineno_to_row(model)
 
   for _, file in ipairs(store:get_all()) do
     if file.path == path then
       -- File-level comment: virt_lines above row 1 + a sign on row 1, on the
-      -- new buffer (the canonical side for a file comment).
+      -- side that holds the file (new normally, old for a deleted file).
       if file.comment and file.comment ~= "" then
-        local buf = new_buf
+        local buf = file_comment_buf(old_buf, new_buf, model)
         if buf and vim.api.nvim_buf_is_valid(buf) then
           local vlines = {}
           for _, ln in ipairs(vim.split(file.comment, "\n", { plain = true })) do
@@ -220,8 +272,9 @@ local function paint_comments(old_buf, new_buf, ns, model, store, path)
         local side = c.side
         local buf = side == "old" and old_buf or new_buf
         local idx_map = side == "old" and old_idx or new_idx
+        local max_lineno = side == "old" and old_max or new_max
         local lineno = side == "old" and c.old_lineno or c.new_lineno
-        local row = lineno and idx_map[lineno]
+        local row = resolve_comment_row(idx_map, lineno, max_lineno)
         if buf and row and vim.api.nvim_buf_is_valid(buf) then
           local vlines = {}
           for _, ln in ipairs(vim.split(c.body or "", "\n", { plain = true })) do
@@ -238,14 +291,20 @@ local function paint_comments(old_buf, new_buf, ns, model, store, path)
   end
 end
 
+-- Resolve the path the comments belong to: the view's current file.
+local function view_path(view)
+  return (type(view.current) == "function" and view:current() or {}).path
+    or view.path
+end
+
 -- ── API: apply ─────────────────────────────────────────────────────────────
+-- Full paint: fill the buffers, start treesitter, draw the diff (NS), and draw
+-- the comment markers (NS_COMMENTS). Used on open and on a file switch.
 function M.apply(view, model, store)
   ensure_highlights()
   local ns = vim.api.nvim_create_namespace(M.NS)
   local old_buf, new_buf = view_buffers(view)
   local lang = view_lang(view)
-  local path = (type(view.current) == "function" and view:current() or {}).path
-    or view.path
 
   local old_lines, new_lines = side_lines(model)
   set_buf_lines(old_buf, old_lines)
@@ -259,7 +318,7 @@ function M.apply(view, model, store)
     start_treesitter(new_buf, lang)
   end
 
-  -- Clear prior paint, then repaint.
+  -- Clear prior diff paint, then repaint.
   if old_buf and vim.api.nvim_buf_is_valid(old_buf) then
     vim.api.nvim_buf_clear_namespace(old_buf, ns, 0, -1)
     paint_side(old_buf, ns, model, "old")
@@ -267,6 +326,25 @@ function M.apply(view, model, store)
   if new_buf and vim.api.nvim_buf_is_valid(new_buf) then
     vim.api.nvim_buf_clear_namespace(new_buf, ns, 0, -1)
     paint_side(new_buf, ns, model, "new")
+  end
+
+  M.apply_comments(view, model, store)
+end
+
+-- Comment-only repaint: clear and redraw just the comment markers from the
+-- store, leaving the buffer content, treesitter, and diff paint untouched. This
+-- is the cheap path for a comment add/delete (no buffer refill, no re-parse).
+function M.apply_comments(view, model, store, path)
+  ensure_highlights()
+  local ns = vim.api.nvim_create_namespace(M.NS_COMMENTS)
+  local old_buf, new_buf = view_buffers(view)
+  path = path or view_path(view)
+
+  if old_buf and vim.api.nvim_buf_is_valid(old_buf) then
+    vim.api.nvim_buf_clear_namespace(old_buf, ns, 0, -1)
+  end
+  if new_buf and vim.api.nvim_buf_is_valid(new_buf) then
+    vim.api.nvim_buf_clear_namespace(new_buf, ns, 0, -1)
   end
 
   paint_comments(old_buf, new_buf, ns, model, store, path)

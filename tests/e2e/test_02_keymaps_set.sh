@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Test 02: keymaps are registered on diff buffers after DiffviewDiffBufRead fires
+# Test 02: comment keymaps are registered on both renderer diff buffers
 # Covers: TST-UIX-0008
 set -euo pipefail
 source "$(dirname "$0")/lib.sh"
@@ -11,42 +11,35 @@ repo=$(bash "$(dirname "$0")/setup_repo.sh")
 echo "Test repo: $repo"
 
 cat > /tmp/cr-keymap-check.lua <<'EOF'
-local ok, lib = pcall(require, 'diffview.lib')
-local lines = { 'lib_ok=' .. tostring(ok) }
-if ok then
-  local v = lib.get_current_view()
-  table.insert(lines, 'view=' .. tostring(v))
-  if v and v.cur_layout then
-    table.insert(lines, 'cur_layout=' .. tostring(v.cur_layout))
-    local check = function(side_name, side_obj)
-      if not side_obj then
-        table.insert(lines, side_name .. '_obj=nil')
-        return
-      end
-      local bufnr = nil
-      if side_obj.file and side_obj.file.bufnr then
-        bufnr = side_obj.file.bufnr
-      elseif side_obj.id then
-        local pok, b = pcall(vim.api.nvim_win_get_buf, side_obj.id)
-        if pok then bufnr = b end
-      end
-      table.insert(lines, side_name .. '_bufnr=' .. tostring(bufnr))
-      if bufnr then
-        local maps = vim.api.nvim_buf_get_keymap(bufnr, 'n')
-        table.insert(lines, side_name .. '_keymap_count=' .. tostring(#maps))
-        local has_rc, has_rs, has_rd = false, false, false
-        for _, m in ipairs(maps) do
-          if m.lhs == ' Rc' then has_rc = true end
-          if m.lhs == ' Rs' then has_rs = true end
-          if m.lhs == ' Rd' then has_rd = true end
-        end
-        table.insert(lines, side_name .. '_has_rc=' .. tostring(has_rc))
-        table.insert(lines, side_name .. '_has_rs=' .. tostring(has_rs))
-        table.insert(lines, side_name .. '_has_rd=' .. tostring(has_rd))
-      end
+-- Find the renderer's two diff buffers by their synthetic names (REQ-RND-0005).
+local function diff_bufs()
+  local a, b
+  for _, buf in ipairs(vim.api.nvim_list_bufs()) do
+    local nm = vim.api.nvim_buf_get_name(buf)
+    if nm:find('code-review://old/', 1, true) then a = buf end
+    if nm:find('code-review://new/', 1, true) then b = buf end
+  end
+  return a, b
+end
+
+local lines = {}
+local a_buf, b_buf = diff_bufs()
+local sides = { a = a_buf, b = b_buf }
+for _, side_name in ipairs({ 'a', 'b' }) do
+  local bufnr = sides[side_name]
+  table.insert(lines, side_name .. '_bufnr=' .. tostring(bufnr))
+  if bufnr then
+    local maps = vim.api.nvim_buf_get_keymap(bufnr, 'n')
+    table.insert(lines, side_name .. '_keymap_count=' .. tostring(#maps))
+    local has_rc, has_rs, has_rd = false, false, false
+    for _, m in ipairs(maps) do
+      if m.lhs == ' Rc' then has_rc = true end
+      if m.lhs == ' Rs' then has_rs = true end
+      if m.lhs == ' Rd' then has_rd = true end
     end
-    check('a', v.cur_layout.a)
-    check('b', v.cur_layout.b)
+    table.insert(lines, side_name .. '_has_rc=' .. tostring(has_rc))
+    table.insert(lines, side_name .. '_has_rs=' .. tostring(has_rs))
+    table.insert(lines, side_name .. '_has_rd=' .. tostring(has_rd))
   end
 end
 vim.fn.writefile(lines, '/tmp/cr-keymap-check.txt')

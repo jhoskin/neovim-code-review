@@ -12,17 +12,13 @@ echo "Test repo: $repo"
 
 # Custom init: disable add_comment and delete_comment, keep others
 cat > /tmp/cr-disable-init.lua <<'EOF'
-local root = vim.fn.fnamemodify(debug.getinfo(1, "S").source:sub(2), ":h")
-local deps = "/Users/joh/dev/neovim-code-review/.tests/deps"
 local plugin = "/Users/joh/dev/neovim-code-review"
 
-vim.opt.runtimepath:prepend(deps .. "/diffview.nvim")
 vim.opt.runtimepath:prepend(plugin)
 vim.opt.swapfile = false
 vim.opt.backup = false
 vim.g.mapleader = " "
 
-require("diffview").setup({ use_icons = false })
 require("code-review").setup({
   keymaps = {
     add_comment = false,
@@ -42,9 +38,10 @@ sleep 2
 
 # Check that the disabled keymaps are NOT set, but the others are
 cat > /tmp/cr-disable-check.lua <<'EOF'
-local lib = require('diffview.lib')
-local v = lib.get_current_view()
-local bufnr = v.cur_layout.b.file.bufnr
+local bufnr
+for _, buf in ipairs(vim.api.nvim_list_bufs()) do
+  if vim.api.nvim_buf_get_name(buf):find('code-review://new/', 1, true) then bufnr = buf end
+end
 local maps = vim.api.nvim_buf_get_keymap(bufnr, 'n')
 
 local has = { cc = false, cd = false, cs = false, cf = false, cq = false, cp = false }

@@ -521,10 +521,13 @@ view with the same range, restores all comments and extmarks.
 
 ### 4.9 Quit interception
 
-When the user executes `:q`, `:qa`, or `ZQ`, the plugin intercepts the quit
-via a `QuitPre` autocmd. If there are unsaved comments, the plugin shows the
-summary screen (SCR-SUMMARY-01) for confirmation. If the user cancels the
-summary and quits again, no review file is created and Neovim exits with code 2.
+When the user quits Neovim (`:qa`, `ZQ`, or `:q` on the last window) without
+having submitted, the plugin intercepts the exit via a `VimLeavePre` autocmd,
+lets the quit proceed, creates no review file, and in agent mode exits with
+code 2. `VimLeavePre` is used rather than `QuitPre` because `QuitPre` cannot
+distinguish a `:q` that closes one of several diff panes from a full quit; a
+`:q` that only closes a pane leaves the review running. The summary screen
+(SCR-SUMMARY-01) is shown by the submit keymap, not on quit.
 
 The plugin does not prevent quitting. A quit without submitting is treated as
 cancellation, not as an empty review.
@@ -852,8 +855,8 @@ whenever line 1 is in view, providing a discoverable indicator
 independent of scroll position.
 
 **REQ-UIX-0007** (Event-driven): When the user quits Neovim without submitting
-a review, the system shall intercept the quit via `QuitPre`, allow the quit to
-proceed, create no review file, and exit with code 2 (see section 4.9).
+a review, the system shall intercept the exit via `VimLeavePre`, allow the quit
+to proceed, create no review file, and exit with code 2 (see section 4.9).
 
 **REQ-UIX-0008** (Ubiquitous): Default keybindings shall use the `<leader>R`
 prefix (Review) to avoid collision with common LazyVim/which-key
@@ -902,8 +905,12 @@ the minimum required version.
 that cannot be resolved by git, then the system shall exit with code 1 and print
 a diagnostic to stderr identifying the unresolvable revision.
 
-**REQ-ERR-0008** (Unwanted-behavior): If stdin is not a TTY, then the system
-shall exit with code 1 and print a diagnostic to stderr.
+**REQ-ERR-0008** (Unwanted-behavior): If Neovim is running without an
+interactive UI (headless, `nvim_list_uis()` empty), then the system shall exit
+with code 1 and print a diagnostic to stderr. The review is interactive and
+cannot collect comment input without an attached UI. (Stated as "stdin not a
+TTY" originally; `nvim_list_uis()` is the reliable signal because a redirected
+stderr alone flips stdin's handle type even with a UI attached.)
 
 ### 6.7 Session management (REQ-SES)
 
@@ -1038,7 +1045,7 @@ buffer and adds a comment, the system shall resolve the cursor row to
 | REQ-ERR-0004  | TST-ERR-0004  | Auto     | Make audit trail directory unwritable, verify exit code 1 and diagnostic to stderr |
 | REQ-ERR-0006  | TST-ERR-0006  | Auto     | Mock `vim.version()` to return 0.9, verify exit code 1 and version diagnostic |
 | REQ-ERR-0007  | TST-ERR-0007  | Auto     | Invoke with nonexistent branch name, verify exit code 1 and diagnostic naming the revision |
-| REQ-ERR-0008  | TST-ERR-0008  | Auto     | Invoke with stdin redirected from /dev/null, verify exit code 1 |
+| REQ-ERR-0008  | TST-ERR-0008  | Auto     | Invoke under `nvim --headless` (no UI), verify exit code 1 and stderr diagnostic |
 | REQ-SES-0001  | TST-SES-0001  | Manual   | Execute `:CodeReviewPause`, verify session file created in sessions directory and the diff view closed |
 | REQ-SES-0002  | TST-SES-0002  | Manual   | Execute `:CodeReviewSessions`, verify floating window lists saved sessions with range, count, and date |
 | REQ-SES-0003  | TST-SES-0003  | Auto     | Pause a session, read the session JSON, verify it contains comments, diff range, and timestamps |

@@ -8,7 +8,6 @@ M.defaults = {
     summary = "<leader>Rs",
     cancel = "<leader>Rq",
     pause = "<leader>Rp",
-    refresh = "<leader>RR",
     confirm_comment = "<C-s>",
   },
   highlights = {

@@ -34,17 +34,19 @@ local function file_status(f)
   return "M"
 end
 
+-- Per-file comment count. The real Store exposes count_for(path); a plain
+-- {path = n} table is accepted too so tests can pass a light stub. NB: the old
+-- code fell through to store.comment_count(store, path), but Store:comment_count
+-- ignores its argument and returns the whole-store total, so every file showed
+-- the same number.
 local function count_for(store, path)
   if not store then
     return 0
   end
   if type(store.count_for) == "function" then
-    return store.count_for(store, path) or store.count_for(path) or 0
+    return store:count_for(path) or 0
   end
-  if type(store.comment_count) == "function" then
-    return store.comment_count(store, path) or store.comment_count(path) or 0
-  end
-  if type(store) == "table" and store[path] ~= nil then
+  if type(store) == "table" and type(store[path]) == "number" then
     return store[path]
   end
   return 0
