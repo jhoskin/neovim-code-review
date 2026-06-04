@@ -22,6 +22,9 @@ M.defaults = {
   },
   sign_text = "●",
   file_sign_text = "📄",
+  -- Width (columns) of the file-tree panel. Slim by default so the side-by-side
+  -- diff gets the space; the indented tree keeps rows short (REQ-RND-0014).
+  panel_width = 20,
 }
 
 M.values = vim.deepcopy(M.defaults)

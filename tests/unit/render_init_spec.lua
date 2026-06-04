@@ -12,6 +12,7 @@ local eq, ok = H.assert.eq, H.assert.ok
 local render = require("code-review.render")
 local diff = require("code-review.diff")
 local Store = require("code-review.store")
+local config = require("code-review.config")
 
 -- Run a git command inside `dir`, asserting success so a broken fixture fails
 -- loudly instead of silently producing an empty diff.
@@ -229,10 +230,12 @@ describe("render/init orchestration", function()
         return rows
       end
 
-      -- 0-based panel line index for a path.
+      -- 0-based panel line index for a path. Tree leaf rows show the basename
+      -- (the directory segments are separate rows), so match on the basename.
       local function panel_row(path)
+        local base = vim.fs.basename(path)
         for i, l in ipairs(vim.api.nvim_buf_get_lines(view.panel_buf, 0, -1, false)) do
-          if l:find(path, 1, true) then
+          if l:find(base, 1, true) then
             return i - 1
           end
         end
@@ -275,5 +278,21 @@ describe("render/init orchestration", function()
       render.close()
     end)
     rmrf(base)
+  end)
+
+  -- Covers: TST-RND-0014 (panel width configurable via config.values.panel_width).
+  it("sizes the panel window to config.values.panel_width", function()
+    local repo = make_repo()
+    in_dir(repo, function()
+      local info = diff.resolve_shas(diff.parse_range(nil))
+      local saved = config.values.panel_width
+      config.values.panel_width = 18
+      local view = render.open(info, Store.new())
+      eq(vim.api.nvim_win_get_width(view.panel_win), 18,
+        "panel window sized to the configured panel_width")
+      render.close()
+      config.values.panel_width = saved
+    end)
+    rmrf(repo)
   end)
 end)
