@@ -107,7 +107,7 @@ No plugin dependencies. The diff renderer is built in (pure Lua +
 ## Bundled scripts
 
 `scripts/interactive-review-launch` is the wrapper the Claude Code
-slash command exec's to hand off to Neovim (tmux session, Ghostty window,
+slash command exec's to hand off to Neovim (tmux session, Ghostty tab,
 sentinel polling, exit-code dispatch). See
 [docs/claude-integration.md](docs/claude-integration.md) for the
 install-once-then-forget setup.
