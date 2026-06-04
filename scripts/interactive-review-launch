@@ -18,7 +18,9 @@
 # client (this script, the Ghostty window, your own terminal) reaches the same one.
 #
 # Subcommands:
-#   start [<git-range>]      spawn the review; print a HANDLE on stdout, exit 0
+#   start [<git-range>]      spawn the review; print a HANDLE on stdout, exit 0.
+#                            No range defaults to HEAD~2..HEAD (override with
+#                            CR_DEFAULT_RANGE); see resolve_range.
 #   status <handle>          one-shot check: exit 3=running, 0=done (review JSON
 #                            on stdout), 2=cancelled/aborted, 1/other=error
 #   wait <handle> [interval] block, polling every <interval>s (default 1), until
@@ -28,7 +30,8 @@
 #                            by a start that was never reaped). Runs
 #                            automatically before each `start`; also runnable on
 #                            demand or from cron/launchd.
-#   <git-range> | (nothing)  legacy: start + wait in one blocking call
+#   <git-range> | (nothing)  legacy: start + wait in one blocking call (a
+#                            missing range defaults to HEAD~2..HEAD)
 #
 # When the review reaches a terminal state, the Ghostty window, the tmux session,
 # and the temp files are cleaned up. Anything missed (a start that was never
@@ -68,11 +71,32 @@ reject_unsafe_range() {
   esac
 }
 
+# Default git range when the caller passes none. A bare working-tree review
+# includes untracked files (agent worktrees, scratch dirs) and is rarely what
+# you want, so default to the last two commits (HEAD~2..HEAD). Override with
+# CR_DEFAULT_RANGE. Falls back to the working tree only when HEAD~2 doesn't
+# exist (a shallow or brand-new repo) or we're not in a git repo. Runs in the
+# caller's cwd, i.e. the repo under review.
+resolve_range() {
+  local range="$1"
+  [ -n "$range" ] && { printf '%s' "$range"; return; }
+  if [ -n "${CR_DEFAULT_RANGE:-}" ]; then
+    printf '%s' "$CR_DEFAULT_RANGE"
+    return
+  fi
+  if git rev-parse --verify --quiet 'HEAD~2^{commit}' >/dev/null 2>&1; then
+    printf 'HEAD~2..HEAD'
+    return
+  fi
+  printf '' # too few commits / not a git repo -> working-tree review
+}
+
 # Spawn a review. Sets HANDLE (= the result-file path) and writes <handle>.state
 # recording the tmux session and socket. Diagnostics go to stderr; nothing
 # is written to stdout.
 spawn_review() {
-  local range="${1:-}"
+  local range
+  range=$(resolve_range "${1:-}")
   reject_unsafe_range "$range"
 
   mkdir -p "$WORKDIR"
