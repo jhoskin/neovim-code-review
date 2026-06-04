@@ -46,7 +46,7 @@ Setup, in order:
    writes the path of the JSON review file into it so the agent knows
    where to look.
 2. Neovim opens in your terminal showing the diff. Use the review
-   keymaps (`<leader>Rc` to add a line comment, `<leader>Rf` for a
+   keymaps (`<leader>Rr` to add a line comment, `<leader>RR` for a
    file-level comment, `<C-s>` (Ctrl-S) to confirm the comment text,
    `<leader>Rs` to open the summary and submit, `<leader>Rq` to
    cancel). See the
@@ -287,7 +287,7 @@ Launching code review for HEAD~2..HEAD. Add comments in Neovim, then
 <leader>Rs to submit (or <leader>Rq to cancel).
 
 ⏺ Bash(NVIM_CODE_REVIEW_RESULT=… nvim -c 'CodeReview HEAD~2..HEAD')
-  [Neovim takes over the terminal. Navigate the diff, <leader>Rc on a
+  [Neovim takes over the terminal. Navigate the diff, <leader>Rr on a
    line to add a comment, <C-s> (Ctrl-S) to confirm. After commenting,
    <leader>Rs opens the summary, <CR> submits.]
   ⎿  (Neovim exits 0; control returns to Claude Code.)

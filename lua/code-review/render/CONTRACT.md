@@ -136,6 +136,10 @@ Pure helpers + extmark application in two namespaces: diff paint in
 ```
 open(diff_info, store, opts)    -- build view, panel, paint first file
 switch_file(path)               -- repaint diff + panel for a new file
+next_file() / prev_file()       -- switch changed file (wraps), focus new side
+next_change([count]) / prev_change([count])
+  -- move cursor to the next/previous hunk start in the current file, wrapping
+  -- within the file, honoring [count] (default vim.v.count1). REQ-RND-0016.
 repaint_comments()              -- comment-only repaint after add/delete
 close()
 current_path() -> path | nil    -- file shown in the diff windows (panel-safe)

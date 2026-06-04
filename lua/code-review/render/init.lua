@@ -246,6 +246,102 @@ function M.prev_file()
   focus_new_win()
 end
 
+-- ── Change (hunk) navigation ───────────────────────────────────────────────
+-- A hunk is a maximal run of non-context rows. hunk_starts returns the 1-based
+-- model-row indices that begin a hunk (a non-context row whose predecessor is
+-- context or absent). Pure — no UI — so it is unit-testable.
+local function hunk_starts(model)
+  local starts, prev_ctx = {}, true
+  for i, row in ipairs(model.rows) do
+    local is_change = row.kind ~= "context"
+    if is_change and prev_ctx then
+      starts[#starts + 1] = i
+    end
+    prev_ctx = not is_change
+  end
+  return starts
+end
+M._hunk_starts = hunk_starts -- exposed for tests
+
+-- Step `count` hunk starts from row `cur` in `dir` ("next"/"prev"), wrapping
+-- within the file (past the last back to the first, before the first to the
+-- last). Returns the target row, or nil when there are no hunks.
+local function step_hunk(starts, cur, dir, count)
+  if #starts == 0 then
+    return nil
+  end
+  count = math.max(count or 1, 1)
+  local pos = cur
+  for _ = 1, count do
+    local found
+    if dir == "prev" then
+      for i = #starts, 1, -1 do
+        if starts[i] < pos then
+          found = starts[i]
+          break
+        end
+      end
+      pos = found or starts[#starts] -- wrap to the last
+    else
+      for _, s in ipairs(starts) do
+        if s > pos then
+          found = s
+          break
+        end
+      end
+      pos = found or starts[1] -- wrap to the first
+    end
+  end
+  return pos
+end
+
+-- The diff window to navigate from: the current one if it is a diff window, else
+-- the new-side window. Returns win, cursor_row (or nil, nil).
+local function nav_window()
+  local v = state.view
+  if not v then
+    return nil, nil
+  end
+  local cur = v:current()
+  local win = (cur and cur.win) or v.new_win
+  if not (win and vim.api.nvim_win_is_valid(win)) then
+    return nil, nil
+  end
+  return win, vim.api.nvim_win_get_cursor(win)[1]
+end
+
+-- Move the cursor to the start of the next/previous changed hunk in the current
+-- file, wrapping within the file and honoring a [count] (vim.v.count1 by
+-- default; tests may pass an explicit count). Both diff windows move together so
+-- the scrollbind/cursorbind pair stays aligned (REQ-RND-0016).
+local function goto_change(dir, count)
+  if not (state.view and state.current_path) then
+    return
+  end
+  local starts = hunk_starts(model_for(state.current_path))
+  if #starts == 0 then
+    return
+  end
+  local _, row = nav_window()
+  local target = step_hunk(starts, row or 0, dir, count or vim.v.count1)
+  if not target then
+    return
+  end
+  for _, w in ipairs({ state.view.old_win, state.view.new_win }) do
+    if w and vim.api.nvim_win_is_valid(w) then
+      pcall(vim.api.nvim_win_set_cursor, w, { target, 0 })
+    end
+  end
+end
+
+function M.next_change(count)
+  goto_change("next", count)
+end
+
+function M.prev_change(count)
+  goto_change("prev", count)
+end
+
 -- Repaint just the comment markers for the current file from the store, plus the
 -- panel counts. The cheap path after a comment add/delete: no buffer refill, no
 -- treesitter restart, no diff repaint (unlike switch_file).
