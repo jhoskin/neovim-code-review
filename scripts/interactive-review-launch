@@ -104,12 +104,17 @@ spawn_review() {
     exit 1
   fi
 
-  # Surface the review in a new Ghostty window. AppleScript is Ghostty's official
-  # automation interface; `wait after command` defaults false, so the window
-  # closes itself when the review ends and the tmux attach exits — nothing to
-  # track. If AppleScript fails, print the manual attach command.
-  if osascript -e "tell application \"Ghostty\" to new window with configuration {command:\"tmux -S $sock attach -t $session\"}" >/dev/null 2>&1; then
-    printf 'Review opened in a new Ghostty window (tmux session: %s).\n' "$session" >&2
+  # Surface the review in a new Ghostty tab (falling back to a window).
+  # AppleScript is Ghostty's official automation interface. Ghostty runs a
+  # surface `command` in a bare shell (bash --noprofile --norc), so $PATH lacks
+  # Homebrew — pass tmux's absolute path. `wait after command` defaults false, so
+  # the tab closes itself when the review ends and the tmux attach exits. If
+  # AppleScript fails, print the manual attach command.
+  local tmux_bin
+  tmux_bin=$(command -v tmux || echo tmux)
+  if osascript -e "tell application \"Ghostty\" to new tab in front window with configuration {command:\"$tmux_bin -S $sock attach -t $session\"}" >/dev/null 2>&1 \
+     || osascript -e "tell application \"Ghostty\" to new window with configuration {command:\"$tmux_bin -S $sock attach -t $session\"}" >/dev/null 2>&1; then
+    printf 'Review opened in Ghostty (tmux session: %s).\n' "$session" >&2
   else
     printf 'Attach to the review with:  tmux -S %s attach -t %s\n' "$sock" "$session" >&2
   fi
