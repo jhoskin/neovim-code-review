@@ -242,9 +242,11 @@ is no TTY for it to render into, and the agent's Bash call just sits
 there until the timeout fires. The bundled script wraps `nvim` in a
 detached `tmux new-session -d`, which gives Neovim its own pseudo-TTY,
 then opens that session in a new Ghostty tab via AppleScript
-(`osascript`, Ghostty's official automation interface). Ghostty runs a
-surface `command` in a bare shell (`bash --noprofile --norc`), so the
-script passes tmux's absolute path rather than relying on `$PATH`. If
+(`osascript`, Ghostty's official automation interface). The tab runs
+`exec tmux attach` through the surface's `initial input` (typed into a
+normal login shell), not the `command` property: Ghostty keeps a
+`command`-surface open after the command exits, but a shell that `exec`s
+tmux closes the tab by ordinary shell-exit when the review ends. If
 AppleScript fails (Ghostty not running, or not on macOS) the script
 falls back to printing the `tmux attach -t <session>` command for you to
 run by hand in any terminal pane.

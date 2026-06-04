@@ -105,15 +105,23 @@ spawn_review() {
   fi
 
   # Surface the review in a new Ghostty tab (falling back to a window).
-  # AppleScript is Ghostty's official automation interface. Ghostty runs a
-  # surface `command` in a bare shell (bash --noprofile --norc), so $PATH lacks
-  # Homebrew — pass tmux's absolute path. `wait after command` defaults false, so
-  # the tab closes itself when the review ends and the tmux attach exits. If
-  # AppleScript fails, print the manual attach command.
-  local tmux_bin
+  # AppleScript is Ghostty's official automation interface. We run the attach via
+  # the surface's `initial input` (typed into a normal login shell) with `exec`,
+  # NOT the `command` property, for two reasons:
+  #   - `command` runs in a bare shell (bash --noprofile --norc) with no Homebrew
+  #     on $PATH, so `tmux` is not found;
+  #   - Ghostty keeps an AppleScript `command`-surface open after the command
+  #     exits (it ignores wait-after-command for these), so the tab would never
+  #     close.
+  # `exec` makes tmux the shell's process, so when the review ends and tmux
+  # detaches the surface closes by ordinary shell-exit. `tmux_bin` is absolute so
+  # it does not depend on the shell's aliases. The login shell has $PATH, so a
+  # plain `tmux` would also resolve, but absolute is unambiguous.
+  local tmux_bin attach
   tmux_bin=$(command -v tmux || echo tmux)
-  if osascript -e "tell application \"Ghostty\" to new tab in front window with configuration {command:\"$tmux_bin -S $sock attach -t $session\"}" >/dev/null 2>&1 \
-     || osascript -e "tell application \"Ghostty\" to new window with configuration {command:\"$tmux_bin -S $sock attach -t $session\"}" >/dev/null 2>&1; then
+  attach="exec $tmux_bin -S $sock attach -t $session"
+  if osascript -e "tell application \"Ghostty\" to new tab in front window with configuration {initial input:\"$attach\r\"}" >/dev/null 2>&1 \
+     || osascript -e "tell application \"Ghostty\" to new window with configuration {initial input:\"$attach\r\"}" >/dev/null 2>&1; then
     printf 'Review opened in Ghostty (tmux session: %s).\n' "$session" >&2
   else
     printf 'Attach to the review with:  tmux -S %s attach -t %s\n' "$sock" "$session" >&2
@@ -170,9 +178,9 @@ session_alive() {
 }
 
 # Tear down the review's tmux session and temp files. Idempotent. Killing the
-# tmux session makes the attached Ghostty window's `tmux attach` exit, and the
-# window closes itself (wait-after-command defaults false), so there is no
-# window to close explicitly.
+# tmux session makes the attached `tmux attach` exit; because it was started with
+# `exec` in the Ghostty tab's shell, the tab closes by ordinary shell-exit, so
+# there is no Ghostty surface to close explicitly.
 cleanup_review() {
   local handle="$1"
   read_state "$handle"
