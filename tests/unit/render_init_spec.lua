@@ -296,4 +296,59 @@ describe("render/init orchestration", function()
     end)
     rmrf(repo)
   end)
+
+  -- Covers: TST-RND-0016 (jump to next/previous change; wrap within file; count).
+  it("next_change/prev_change jump between hunks, wrap, and honor a count", function()
+    -- hunk_starts is pure: a hunk is a maximal run of non-context rows.
+    eq(render._hunk_starts({ rows = {
+      { kind = "context" }, { kind = "add" }, { kind = "context" },
+      { kind = "context" }, { kind = "add" }, { kind = "context" },
+    } }), { 2, 5 }, "hunk_starts marks each run's first row")
+
+    local base = vim.fn.resolve(vim.fn.tempname())
+    assert(vim.fn.mkdir(base, "p") == 1)
+    git(base, { "init", "-q" })
+    git(base, { "config", "user.email", "t@example.com" })
+    git(base, { "config", "user.name", "t" })
+    git(base, { "config", "commit.gpgsign", "false" })
+    write_file(base, "f.txt", "1\n2\n3\n4\n")
+    git(base, { "add", "-A" })
+    git(base, { "commit", "-q", "-m", "base" })
+    -- Two pure insertions (unambiguous single add rows): NEW after line 1, ALSO
+    -- after line 3. Visual rows: ctx, add, ctx, ctx, add, ctx -> hunks at 2 and 5.
+    write_file(base, "f.txt", "1\nNEW\n2\n3\nALSO\n4\n")
+
+    in_dir(base, function()
+      local info = diff.resolve_shas(diff.parse_range(nil))
+      local view = render.open(info, Store.new())
+      eq(render.current_path(), "f.txt", "single changed file")
+
+      vim.api.nvim_set_current_win(view.new_win)
+      local function cur_row()
+        return vim.api.nvim_win_get_cursor(view.new_win)[1]
+      end
+      vim.api.nvim_win_set_cursor(view.new_win, { 1, 0 })
+
+      render.next_change()
+      eq(cur_row(), 2, "next_change -> first hunk")
+      render.next_change()
+      eq(cur_row(), 5, "next_change -> second hunk")
+      render.next_change()
+      eq(cur_row(), 2, "next_change wraps to the first hunk")
+
+      render.prev_change()
+      eq(cur_row(), 5, "prev_change from the first hunk wraps to the last")
+
+      vim.api.nvim_win_set_cursor(view.new_win, { 1, 0 })
+      render.next_change(2)
+      eq(cur_row(), 5, "next_change with count 2 steps two hunks")
+
+      -- Both diff windows stay aligned on the same row after a jump.
+      eq(vim.api.nvim_win_get_cursor(view.old_win)[1], cur_row(),
+        "old and new windows sit on the same row after a jump")
+
+      render.close()
+    end)
+    rmrf(base)
+  end)
 end)
