@@ -18,6 +18,7 @@ local render_diff = require("code-review.render.diff")
 local view_mod = require("code-review.render.view")
 local panel = require("code-review.render.panel")
 local paint = require("code-review.render.paint")
+local config = require("code-review.config")
 
 local M = {}
 
@@ -145,6 +146,17 @@ function M.open(diff_info, store, opts)
   state.models = {}
 
   local files = diff.changed_files(diff_info)
+  -- Order the file list to match the panel's tree (directories first, then
+  -- case-insensitive alphabetical). next_file/prev_file iterate state.files, so
+  -- ordering it once here keeps navigation in lockstep with the visible tree
+  -- (REQ-RND-0011/0013).
+  local rank = {}
+  for i, p in ipairs(panel.leaf_order(files)) do
+    rank[p] = i
+  end
+  table.sort(files, function(a, b)
+    return (rank[a.path] or math.huge) < (rank[b.path] or math.huge)
+  end)
   state.files = files
   state.file_meta = {}
   for _, entry in ipairs(files) do
@@ -156,7 +168,10 @@ function M.open(diff_info, store, opts)
 
   -- No content provider: paint.apply fills the diff buffers (render_path). The
   -- view only lays out windows and tracks the path.
-  state.view = view_mod.open(diff_info, { first_file = first })
+  state.view = view_mod.open(diff_info, {
+    first_file = first,
+    panel_width = config.values.panel_width,
+  })
 
   render_panel()
   panel.setup_keymaps(state.view, function(path)

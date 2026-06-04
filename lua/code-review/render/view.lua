@@ -88,11 +88,14 @@ function M.open(diff_info, opts)
   local panel_win = vim.api.nvim_get_current_win()
   vim.api.nvim_win_set_buf(panel_win, panel_buf)
   self.panel_win = panel_win
-  -- Reserve a gutter so the 📄 file-comment sign has somewhere to land
-  -- (panel.lua, REQ-UIX-0006).
-  vim.wo[panel_win].signcolumn = "yes"
-  -- Panel on the left, narrow.
+  -- "auto": the 📄 file-comment sign still lands in the gutter when a comment
+  -- exists (panel.lua, REQ-UIX-0006), but the 2-column gutter is reclaimed for
+  -- the slim tree when no file carries a comment.
+  vim.wo[panel_win].signcolumn = "auto"
+  -- Panel on the left, slim. Stashed so the panel can size its tree rows and
+  -- abbreviate over-long names to the available width (REQ-RND-0013/0014).
   local panel_width = opts.panel_width or 30
+  self.panel_width = panel_width
 
   -- Open the old diff window to the right of the panel.
   vim.cmd("vertical rightbelow split")
@@ -101,8 +104,11 @@ function M.open(diff_info, opts)
   vim.cmd("vertical rightbelow split")
   local new_win = vim.api.nvim_get_current_win()
 
-  -- Size the panel.
+  -- Size the panel, then pin it: winfixwidth keeps the slim width when focus
+  -- moves between windows (otherwise 'winwidth' bumps whichever window is
+  -- current up to its minimum, and 'equalalways' re-spreads on splits).
   pcall(vim.api.nvim_win_set_width, panel_win, panel_width)
+  vim.wo[panel_win].winfixwidth = true
 
   self.old_win = old_win
   self.new_win = new_win

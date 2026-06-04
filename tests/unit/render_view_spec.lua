@@ -215,90 +215,88 @@ describe("render/panel", function()
     }
   end
 
+  -- One subdirectory + two root files. open_view leaves panel_width at the
+  -- default (30 -> inner 28), so nothing here abbreviates.
   local files = {
     { path = "a.lua", status = "M" },
     { path = "src/new.lua", status = "A" },
     { path = "gone.lua", status = "D" },
   }
 
-  it("render writes one line per file with status and count", function()
+  it("render writes an indented tree with status/count on leaf rows", function()
     local v = open_view()
     local store = fake_store({ ["a.lua"] = 3, ["gone.lua"] = 1 })
-    local paths = panel.render(v, files, store)
-    eq(paths, { "a.lua", "src/new.lua", "gone.lua" })
+    -- render returns the leaf paths in visual (tree-walk) order: the src/ subtree
+    -- first (directories sort before files), then the root files alphabetically.
+    local leaves = panel.render(v, files, store)
+    eq(leaves, { "src/new.lua", "a.lua", "gone.lua" })
 
     local lines = vim.api.nvim_buf_get_lines(v.panel_buf, 0, -1, false)
-    eq(#lines, 3, "one line per file")
-    -- a.lua has 3 comments -> count marker present.
-    ok(lines[1]:match("^M%s+a%.lua%s+%(3%)$") ~= nil, "a.lua line: " .. lines[1])
-    -- src/new.lua added, no comments -> no count marker.
-    ok(lines[2]:match("^A%s+src/new%.lua$") ~= nil, "new line: " .. lines[2])
-    ok(lines[3]:match("^D%s+gone%.lua%s+%(1%)$") ~= nil, "gone line: " .. lines[3])
+    eq(lines, {
+      "├ src/",
+      "│ └ A new.lua",
+      "├ M a.lua (3)",
+      "└ D gone.lua (1)",
+    })
     v:close()
   end)
 
   it("render tolerates an empty file list", function()
     -- An empty review is valid (spec 3.2 "Empty review"). render must not crash
-    -- and must report no paths.
+    -- and must report no leaves.
     local v = open_view()
-    local paths = panel.render(v, {}, fake_store({}))
-    eq(paths, {}, "no paths for empty file list")
-    -- path_at_cursor on the empty panel returns nil rather than erroring.
+    local leaves = panel.render(v, {}, fake_store({}))
+    eq(leaves, {}, "no leaves for empty file list")
     vim.api.nvim_set_current_win(v.panel_win)
     vim.api.nvim_win_set_cursor(v.panel_win, { 1, 0 })
     H.assert.is_nil(panel.path_at_cursor(v), "no path under cursor when empty")
     v:close()
   end)
 
-  it("path_at_cursor round-trips every file", function()
+  it("path_at_cursor returns the full path on a leaf and nil on a directory row", function()
     local v = open_view()
-    local store = fake_store({ ["a.lua"] = 3, ["gone.lua"] = 1 })
-    local paths = panel.render(v, files, store)
-    -- Move into the panel and walk each line.
+    panel.render(v, files, fake_store({ ["a.lua"] = 3, ["gone.lua"] = 1 }))
     vim.api.nvim_set_current_win(v.panel_win)
-    for row, expected in ipairs(paths) do
+    -- Row 1 is the "src/" directory row -> no path.
+    vim.api.nvim_win_set_cursor(v.panel_win, { 1, 0 })
+    H.assert.is_nil(panel.path_at_cursor(v), "directory row has no path")
+    -- Rows 2..4 are leaves carrying their full path.
+    local leaf_at = { [2] = "src/new.lua", [3] = "a.lua", [4] = "gone.lua" }
+    for row, expected in pairs(leaf_at) do
       vim.api.nvim_win_set_cursor(v.panel_win, { row, 0 })
-      eq(panel.path_at_cursor(v), expected, "cursor row " .. row)
+      eq(panel.path_at_cursor(v), expected, "leaf row " .. row)
     end
-    v:close()
-  end)
-
-  it("path_at_cursor falls back to parsing the rendered line when the stash misses", function()
-    -- Exercise the real fallback branch in path_at_cursor (not a copy of the
-    -- regex in the test): append a panel line whose row index has no stash
-    -- entry, so the function must parse the rendered text. If the fallback were
-    -- deleted this returns nil and the test fails.
-    local v = open_view()
-    panel.render(v, files, fake_store({ ["a.lua"] = 2 }))
-    -- Row 4 is past the 3 stashed paths -> stash miss -> fallback parse.
-    vim.bo[v.panel_buf].modifiable = true
-    vim.api.nvim_buf_set_lines(v.panel_buf, -1, -1, false, { "A src/extra.lua (5)" })
-    vim.bo[v.panel_buf].modifiable = false
-    vim.api.nvim_set_current_win(v.panel_win)
-    vim.api.nvim_win_set_cursor(v.panel_win, { 4, 0 })
-    eq(panel.path_at_cursor(v), "src/extra.lua", "fallback parsed the count form")
-
-    -- And a no-count line through the same fallback branch.
+    -- A row past the stash is a miss -> nil. The text-parse fallback is gone:
+    -- abbreviated tree text cannot reconstruct a full path, so the stash is the
+    -- single source of truth.
     vim.bo[v.panel_buf].modifiable = true
     vim.api.nvim_buf_set_lines(v.panel_buf, -1, -1, false, { "M plain/file.lua" })
     vim.bo[v.panel_buf].modifiable = false
     vim.api.nvim_win_set_cursor(v.panel_win, { 5, 0 })
-    eq(panel.path_at_cursor(v), "plain/file.lua", "fallback parsed the no-count form")
+    H.assert.is_nil(panel.path_at_cursor(v), "stash miss returns nil, not a parsed path")
     v:close()
   end)
 
-  it("<CR> calls on_select with the path under the cursor", function()
+  it("<CR> selects the leaf under the cursor; a directory row is a no-op", function()
     local v = open_view()
-    local paths = panel.render(v, files, fake_store({}))
+    panel.render(v, files, fake_store({}))
     local selected
     panel.setup_keymaps(v, function(p)
       selected = p
     end)
     vim.api.nvim_set_current_win(v.panel_win)
+    local function press_cr()
+      vim.api.nvim_feedkeys(vim.api.nvim_replace_termcodes("<CR>", true, false, true), "x", false)
+    end
+    -- Row 2 is the "src/new.lua" leaf.
     vim.api.nvim_win_set_cursor(v.panel_win, { 2, 0 })
-    -- Feed <CR> through the mapped key.
-    vim.api.nvim_feedkeys(vim.api.nvim_replace_termcodes("<CR>", true, false, true), "x", false)
-    eq(selected, paths[2], "on_select fired with row-2 path")
+    press_cr()
+    eq(selected, "src/new.lua", "on_select fired with the leaf path")
+    -- Row 1 is the "src/" directory row -> nothing happens.
+    selected = nil
+    vim.api.nvim_win_set_cursor(v.panel_win, { 1, 0 })
+    press_cr()
+    H.assert.is_nil(selected, "<CR> on a directory row does nothing")
     v:close()
   end)
 
@@ -315,9 +313,55 @@ describe("render/panel", function()
     eq(vim.api.nvim_win_get_cursor(v.panel_win)[1], 2, "j moved down")
     press("j")
     press("j")
-    eq(vim.api.nvim_win_get_cursor(v.panel_win)[1], 3, "j clamps at last line")
+    press("j")
+    eq(vim.api.nvim_win_get_cursor(v.panel_win)[1], 4, "j clamps at last line")
     press("k")
-    eq(vim.api.nvim_win_get_cursor(v.panel_win)[1], 2, "k moved up")
+    eq(vim.api.nvim_win_get_cursor(v.panel_win)[1], 3, "k moved up")
+    v:close()
+  end)
+
+  -- Covers: TST-RND-0013 (tree guides + full per-level nesting + ordering).
+  it("nests one segment per level with guides, directories first (TST-RND-0013)", function()
+    local v = open_view()
+    local nested = {
+      { path = "lua/code-review/render/panel.lua", status = "M" },
+      { path = "lua/code-review/render/view.lua", status = "M" },
+      { path = "lua/code-review/init.lua", status = "M" },
+      { path = "zebra.txt", status = "A" },
+    }
+    panel.render(v, nested, fake_store({}))
+    local lines = vim.api.nvim_buf_get_lines(v.panel_buf, 0, -1, false)
+    -- Each directory segment is its own indented row (no chain collapsing); the
+    -- render/ subdirectory sorts before the init.lua file inside code-review/;
+    -- the root file zebra.txt comes after the whole lua/ subtree.
+    eq(lines, {
+      "├ lua/",
+      "│ └ code-review/",
+      "│   ├ render/",
+      "│   │ ├ M panel.lua",
+      "│   │ └ M view.lua",
+      "│   └ M init.lua",
+      "└ A zebra.txt",
+    })
+    v:close()
+  end)
+
+  -- Covers: TST-RND-0013 (~ abbreviation keeping a file's extension).
+  it("abbreviates an over-long basename keeping its extension (TST-RND-0013)", function()
+    local v = view.open(
+      { files = { { path = "x", status = "M" } } },
+      { content_provider = provider, first_file = "x", panel_width = 16 }
+    )
+    panel.render(v, { { path = "a_very_long_filename.lua", status = "M" } }, fake_store({}))
+    local line = vim.api.nvim_buf_get_lines(v.panel_buf, 0, -1, false)[1]
+    -- panel_width 16 -> inner 14. The name is shortened with a "~" but keeps the
+    -- ".lua" extension, and the row fits the inner width.
+    ok(line:match("~%.lua$") ~= nil, "abbreviated, extension kept: " .. line)
+    ok(vim.fn.strdisplaywidth(line) <= 14, "fits inner width: " .. line)
+    -- The stash still resolves the full path (abbreviation is display-only).
+    vim.api.nvim_set_current_win(v.panel_win)
+    vim.api.nvim_win_set_cursor(v.panel_win, { 1, 0 })
+    eq(panel.path_at_cursor(v), "a_very_long_filename.lua", "full path preserved")
     v:close()
   end)
 end)
