@@ -140,9 +140,11 @@ function M._notify_started()
   local km = config.values.keymaps
   vim.notify(
     string.format(
-      "code-review: review started. %s/%s next/prev file · %s line · %s file comment · %s submit · %s cancel",
+      "code-review: review started. %s/%s next/prev file · %s/%s next/prev change · %s line · %s file comment · %s submit · %s cancel",
       key_label(km.next_file),
       key_label(km.prev_file),
+      key_label(km.next_change),
+      key_label(km.prev_change),
       key_label(km.add_comment),
       key_label(km.file_comment),
       key_label(km.summary),
@@ -297,6 +299,21 @@ function M.prev_file()
     return
   end
   require("code-review.render.init").prev_file()
+end
+
+-- Jump to the next / previous changed hunk within the current file.
+function M.next_change()
+  if not M._session then
+    return
+  end
+  require("code-review.render.init").next_change()
+end
+
+function M.prev_change()
+  if not M._session then
+    return
+  end
+  require("code-review.render.init").prev_change()
 end
 
 function M.add_comment()
@@ -533,6 +550,8 @@ function M._set_keymaps(bufnr)
   local km = config.values.keymaps
   set_map(bufnr, km.next_file, M.next_file, "Code review: next file")
   set_map(bufnr, km.prev_file, M.prev_file, "Code review: previous file")
+  set_map(bufnr, km.next_change, M.next_change, "Code review: next change")
+  set_map(bufnr, km.prev_change, M.prev_change, "Code review: previous change")
   set_map(bufnr, km.add_comment, M.add_comment, "Code review: add line comment")
   set_map(bufnr, km.delete_comment, M.delete_comment, "Code review: delete comment")
   set_map(bufnr, km.file_comment, M.add_file_comment, "Code review: add file comment")

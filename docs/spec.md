@@ -328,8 +328,12 @@ Default mappings (user configurable; see REQ-UIX-0008):
 
 | Key          | Context        | Action                                  |
 |--------------|----------------|-----------------------------------------|
-| `<leader>Rc` | diff panel    | Add line comment at cursor              |
-| `<leader>Rf` | file panel    | Add file-level comment for the file shown in the diff (resolved via `render.current_path()`) |
+| `<leader>Rn` | diff/panel    | Next changed file                       |
+| `<leader>RN` | diff/panel    | Previous changed file                   |
+| `]c`         | diff panel    | Jump to next change (hunk)              |
+| `[c`         | diff panel    | Jump to previous change (hunk)          |
+| `<leader>Rr` | diff panel    | Add line comment at cursor              |
+| `<leader>RR` | file panel    | Add file-level comment for the file shown in the diff (resolved via `render.current_path()`) |
 | `<leader>Rd` | diff panel    | Delete comment at cursor                |
 | `<leader>Rs` | any           | Show review summary and submit          |
 | `<leader>Rq` | any           | Cancel review                           |
@@ -439,8 +443,12 @@ convention:
 ```lua
 require("code-review").setup({
   keymaps = {
-    add_comment = "<leader>Rc",
-    file_comment = "<leader>Rf",
+    next_file = "<leader>Rn",
+    prev_file = "<leader>RN",
+    next_change = "]c",
+    prev_change = "[c",
+    add_comment = "<leader>Rr",
+    file_comment = "<leader>RR",
     delete_comment = "<leader>Rd",
     summary = "<leader>Rs",
     cancel = "<leader>Rq",
@@ -882,13 +890,15 @@ itself carries no file-comment sign.
 a review, the system shall intercept the exit via `VimLeavePre`, allow the quit
 to proceed, create no review file, and exit with code 2 (see section 4.9).
 
-**REQ-UIX-0008** (Ubiquitous): Default keybindings shall use the `<leader>R`
-prefix (Review) to avoid collision with common LazyVim/which-key
-`<leader>c*` (code) bindings. Defaults: `<leader>Rc` (add line comment),
-`<leader>Rf` (file comment), `<leader>Rd` (delete comment), `<leader>Rs`
+**REQ-UIX-0008** (Ubiquitous): Default action keybindings shall use the
+`<leader>R` prefix (Review) to avoid collision with common LazyVim/which-key
+`<leader>c*` (code) bindings. Defaults: `<leader>Rn` (next file),
+`<leader>RN` (previous file), `<leader>Rr` (add line comment),
+`<leader>RR` (file comment), `<leader>Rd` (delete comment), `<leader>Rs`
 (submit / show summary), `<leader>Rq` (cancel), `<leader>Rp` (pause), and
-`<C-s>` (confirm comment in float). All keybindings are configurable via
-`setup({ keymaps = { ... } })` (see REQ-UIX-0005).
+`<C-s>` (confirm comment in float). Motion keys are the exception: change
+navigation uses the bracket convention `]c`/`[c` (REQ-UIX-0012). All keybindings
+are configurable via `setup({ keymaps = { ... } })` (see REQ-UIX-0005).
 
 **REQ-UIX-0010** (Optional-feature): Where a value in the `keymaps`
 table passed to `setup()` is `false`, the system shall skip registering
@@ -909,6 +919,13 @@ state in its title whether the comment is line-level ("Line comment") or
 file-level ("File comment: <file>", naming the file), and shall be sized to give
 room for multi-line comments (width up to 70% of the editor, height growing with
 the prefilled content).
+
+**REQ-UIX-0012** (Ubiquitous): The next-change and previous-change actions shall
+default to `]c` and `[c` (the native Vim diff-change motion, also gitsigns'
+default). They are bound buffer-local on the diff buffers so they take
+precedence over any global `]c`/`[c` (e.g. `nvim-treesitter-textobjects` under
+LazyVim, which maps them to next/previous class). Configurable like the other
+keymaps (string, list of strings, or false).
 
 ### 6.6 Error handling (REQ-ERR)
 
@@ -1070,6 +1087,13 @@ indicator). Each diff window shall keep absolute line numbers (no
 `relativenumber`) with a minimal `numberwidth`, no fold column, and a sign
 column shown on demand.
 
+**REQ-RND-0016** (Event-driven): When the user invokes next-change or
+previous-change in a diff buffer, the system shall move the cursor to the start
+of the next or previous changed hunk in the current file — a hunk being a
+maximal run of non-context rows in the diff model — wrapping within the file
+(past the last hunk to the first, before the first to the last), honoring a
+numeric `[count]`, and keeping both diff windows aligned.
+
 ## 7. Verification Matrix
 
 | Requirement   | Test ID       | Method   | Description |
@@ -1127,10 +1151,11 @@ column shown on demand.
 | REQ-CLI-0006  | TST-CLI-0006  | Auto     | In interactive mode, start review and run `:CodeReviewCancel`, verify nvim stays running and a notification is shown; in agent mode, verify exit code 2 |
 | REQ-CLI-0007  | TST-CLI-0007  | Auto     | Start review, run `:CodeReviewPause`, verify session JSON written and `vim.notify` message contains the session ID |
 | REQ-CLI-0008  | TST-CLI-0008  | Auto     | Before session, verify `:CodeReviewSubmit` does not exist; start session, verify it exists; end session, verify it is removed |
-| REQ-UIX-0008  | TST-UIX-0008  | Auto     | Verify `vim.api.nvim_buf_get_keymap()` on a diff buffer contains the documented default keys (`<leader>Rc`, `<leader>Rs`, etc.) |
+| REQ-UIX-0008  | TST-UIX-0008  | Auto     | Verify `vim.api.nvim_buf_get_keymap()` on a diff buffer contains the documented default keys (`<leader>Rn`, `<leader>RN`, `<leader>Rr`, `<leader>Rs`, etc.) |
 | REQ-UIX-0009  | TST-UIX-0009  | Auto     | Trigger `:CodeReviewSubmit`, capture the summary float content, verify it includes the markdown preamble from section 4.7 |
 | REQ-UIX-0010  | TST-UIX-0010  | Auto     | Call `setup({ keymaps = { add_comment = false, delete_comment = false } })`, start a review, verify those keys are not bound on diff buffers while other defaults are |
 | REQ-UIX-0011  | TST-UIX-0011  | Manual   | Open the comment float on a line vs a file, verify the title reads "Line comment" / "File comment: <file>" and the float is larger |
+| REQ-UIX-0012  | TST-UIX-0012  | Auto     | Start a review; verify `]c` and `[c` are bound buffer-local (present in `nvim_buf_get_keymap` for the diff buffers, normal mode) so they take precedence over any global `]c`/`[c` |
 | REQ-RND-0001  | TST-RND-0001  | Auto     | Compute a line diff via the renderer, verify `vim.diff()` is called with `result_type="indices"`, `algorithm="histogram"`, `linematch=60`, `indent_heuristic=true` |
 | REQ-RND-0002  | TST-RND-0002  | Auto     | Render a changed hunk with a single edited line, verify the differing tokens carry `CodeReviewIntraAdd` on the new side and `CodeReviewIntraDelete` on the old side |
 | REQ-RND-0003  | TST-RND-0003  | Auto     | Render a diff buffer for a known filetype, verify treesitter is active (`vim.treesitter.start` ran and the tree is non-empty) on the loaded buffer |
@@ -1146,6 +1171,7 @@ column shown on demand.
 | REQ-RND-0013  | TST-RND-0013  | Auto     | Render a nested file set; verify the panel shows an indented tree with guide connectors, one directory segment per row, directories-first alphabetical order, and an over-long basename abbreviated to `stem~.ext` keeping its extension |
 | REQ-RND-0014  | TST-RND-0014  | Auto     | Set config.values.panel_width and open a review; verify the panel window width equals the configured value |
 | REQ-RND-0015  | TST-RND-0015  | Auto     | Open a review; verify the panel window has no number/fold column and signcolumn auto, and each diff window has number on, relativenumber off, foldcolumn 0, signcolumn auto, and a tight numberwidth |
+| REQ-RND-0016  | TST-RND-0016  | Auto     | On a file with multiple hunks, from a known cursor row invoke next-change/previous-change; verify the cursor lands on the expected hunk-start row, wraps within the file, honors a count, and leaves both diff windows on the same row |
 | REQ-LSP-0002  | TST-LSP-0002  | Auto     | Open the comment float and summary float, verify both have filetype `codereview` (covered by `test_12_float_filetype.sh`) |
 | REQ-LSP-0003  | TST-LSP-0003  | Auto     | Open the comment float, verify no LSPs are attached after the filetype is set |
 | REQ-RND-0005  | TST-LSP-0001  | Auto     | Start a review whose diff includes a `.md` file; assert no LSP client is attached to either diff buffer (consequence of `buftype=nofile`) |
