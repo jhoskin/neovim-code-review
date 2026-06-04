@@ -22,6 +22,10 @@ M.defaults = {
   },
   sign_text = "●",
   file_sign_text = "📄",
+  -- Width (columns) of the file-tree panel (REQ-RND-0014). Wide enough to read
+  -- deep folder structures; the panel reclaims its gutters (no line numbers) so
+  -- most of this is usable text (REQ-RND-0015).
+  panel_width = 40,
 }
 
 M.values = vim.deepcopy(M.defaults)
