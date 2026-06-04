@@ -110,12 +110,26 @@ Pure helpers + extmark application in two namespaces: diff paint in
 
 ## Panel (`render/panel.lua`)
 
-- `render(view, files, store)` — fills the file-panel buffer
-  (`filetype=codereview-panel`): one line per file with `M/A/D` status
-  and a comment-count marker.
-- Navigation: `j`/`k` move; `<CR>` calls `view:show_file(path)`.
-- `path_at_cursor() -> path` by parsing the panel line (we own the
-  format).
+- `render(view, files, store) -> leaf_paths` — fills the file-panel
+  buffer (`filetype=codereview-panel`) as an indented directory tree:
+  one path segment per row drawn with box-drawing guides, directory
+  rows (`<segment>/`) and file leaf rows (`<status> <basename>` + a
+  `(<count>)` marker). Siblings sort directories-first then
+  case-insensitive alphabetical. Over-long names are abbreviated with a
+  `~` (a file keeps its extension) to `view.panel_width`. Returns the
+  leaf paths in visual (top-to-bottom) order — the order navigation
+  steps through.
+- `leaf_order(files) -> leaf_paths` — pure; the same visual leaf order
+  without a view, so the orchestrator can keep `next_file`/`prev_file`
+  in lockstep with the tree.
+- `set_current(view, path)` — marks the current file's leaf row
+  (`CodeReviewPanelCurrent`) and moves the panel cursor there.
+- Navigation: `j`/`k` move; `<CR>` on a leaf calls `on_select(path)`, on
+  a directory row is a no-op.
+- `path_at_cursor() -> path | nil` resolves from the per-line stash
+  (full path on a leaf, nil on a directory row). The stash is the single
+  source of truth — the rendered text may be abbreviated and is not
+  parsed back.
 
 ## Orchestration (`render/init.lua`)
 

@@ -259,9 +259,9 @@ rm -rf ~/.local/share/nvim/code-review/<project-hash>/
 The primary screen. Rendered by the plugin's built-in side-by-side diff
 renderer.
 
-**Layout**: a file-panel + diff-panel layout. The file panel lists changed
-files. The diff panel shows the side-by-side old/new diff for the selected
-file.
+**Layout**: a file-panel + diff-panel layout. The file panel presents changed
+files as a compact, indented directory tree (indented, configurable width). The diff
+panel shows the side-by-side old/new diff for the selected file.
 
 **Comment rendering**: Existing comments appear as extmarks with virtual text
 below the commented line. The virtual text uses a distinct highlight group
@@ -272,7 +272,7 @@ API objects):
 
 | Logical ID             | Neovim object              | Description                          |
 |------------------------|----------------------------|--------------------------------------|
-| `panel.file-list`      | plugin file-panel buffer   | The plugin's file panel              |
+| `panel.file-list`      | plugin file-panel buffer   | The plugin's file-tree panel         |
 | `panel.diff`           | old/new diff buffers       | The plugin's old and new diff buffers |
 | `extmark.comment`      | namespace + extmark ID     | Inline comment virtual text          |
 | `extmark.file-comment` | namespace + extmark ID     | File-level comment indicator         |
@@ -329,7 +329,7 @@ Default mappings (user configurable; see REQ-UIX-0008):
 | Key          | Context        | Action                                  |
 |--------------|----------------|-----------------------------------------|
 | `<leader>Rc` | diff panel    | Add line comment at cursor              |
-| `<leader>Rf` | file panel    | Add file-level comment for file under cursor (resolved by parsing the plugin's file-panel buffer line) |
+| `<leader>Rf` | file panel    | Add file-level comment for the file shown in the diff (resolved via `render.current_path()`) |
 | `<leader>Rd` | diff panel    | Delete comment at cursor                |
 | `<leader>Rs` | any           | Show review summary and submit          |
 | `<leader>Rq` | any           | Cancel review                           |
@@ -417,9 +417,9 @@ end
 **File path resolution**: the repo-relative path is read from the registry
 entry for the current diff window. No external API is consulted.
 
-For the file panel (when adding file-level comments), the file under the
-cursor is resolved by parsing the plugin's own panel buffer line at the
-cursor row.
+For file-level comments, the target file is the one currently shown in the diff
+windows, resolved via `render.current_path()` (valid even when the cursor is in
+the panel), not by parsing a panel line.
 
 **Buffer lifecycle**: the plugin re-renders the two diff buffers when the
 user selects a different file in the panel. Extmarks are re-applied from the
@@ -1020,10 +1020,12 @@ aligned with filler rows so corresponding lines occupy the same screen row.
 **REQ-RND-0006** (Ubiquitous): Per-line change indicators (added/changed/
 deleted) shall be shown as extmark gutter signs.
 
-**REQ-RND-0007** (Ubiquitous): The file panel shall list changed files with
-a status marker (M/A/D) and a per-file comment-count indicator, and support
-`j`/`k`/`<CR>` navigation that re-renders the two diff buffers for the
-selected file.
+**REQ-RND-0007** (Ubiquitous): The file panel shall present changed files as an
+indented directory tree — directory rows for path segments and file (leaf) rows
+showing the basename with an M/A/D status marker and a per-file comment-count
+indicator — and support `j`/`k`/`<CR>` navigation, where `<CR>` on a file row
+re-renders the two diff buffers for that file and `<CR>` on a directory row is a
+no-op.
 
 **REQ-RND-0008** (Ubiquitous): The two diff windows shall keep their scroll
 and cursor positions synchronized.
@@ -1047,6 +1049,26 @@ while focus is in a diff window. Exactly one row is marked at a time.
 **REQ-RND-0012** (Event-driven): When a review is opened, the system shall place
 the cursor in the new-side diff window of the first file (the old-side window for
 a pure-deletion file), not in the file panel, so the reviewer starts on the code.
+
+**REQ-RND-0013** (Ubiquitous): The file tree shall draw indentation with
+tree-guide connectors, order siblings deterministically (directories before
+files, then case-insensitive alphabetical), give each directory segment its own
+indented row (no chain collapsing), and abbreviate any label wider than the
+panel's inner width with a `~` marker — a file basename keeps its extension
+(`stem~.ext`), while a directory segment or an extensionless name end-truncates
+(`prefix~`).
+
+**REQ-RND-0014** (Ubiquitous): The file panel width shall be configurable via
+`config.values.panel_width` (default 40 columns), applied to the panel window on
+open and pinned (`winfixwidth`) so it keeps that width as focus moves between
+windows.
+
+**REQ-RND-0015** (Ubiquitous): The review windows shall reserve only gutter
+columns that carry information. The file panel shall show no line-number column
+and no fold column (a sign column on demand only, for the 📄 file-comment
+indicator). Each diff window shall keep absolute line numbers (no
+`relativenumber`) with a minimal `numberwidth`, no fold column, and a sign
+column shown on demand.
 
 ## 7. Verification Matrix
 
@@ -1115,12 +1137,15 @@ a pure-deletion file), not in the file panel, so the reviewer starts on the code
 | REQ-RND-0004  | TST-RND-0004  | Manual   | Render a diff with unbalanced add/delete counts, verify filler rows keep corresponding lines on the same screen row |
 | REQ-RND-0005  | TST-RND-0005  | Auto     | Render a diff buffer, verify `buftype=nofile`, `buflisted=false`, `bufhidden=wipe`, `modifiable=false`, and window `winfixbuf=true` |
 | REQ-RND-0006  | TST-RND-0006  | Auto     | Render a diff with added/changed/deleted lines, verify gutter sign extmarks are present on the corresponding rows |
-| REQ-RND-0007  | TST-RND-0007  | Manual   | Open the file panel, verify each file shows an M/A/D marker and comment-count; press `<CR>` on a file, verify the two diff buffers re-render for it |
+| REQ-RND-0007  | TST-RND-0007  | Manual   | Open the file panel, verify changed files render as an indented directory tree with file rows showing basename + M/A/D + comment-count; press `<CR>` on a file row, verify the two diff buffers re-render; `<CR>` on a directory row does nothing |
 | REQ-RND-0008  | TST-RND-0008  | Manual   | Scroll and move the cursor in one diff window, verify the other window stays in sync |
 | REQ-RND-0009  | TST-RND-0009  | Auto     | Place the cursor on a known diff row and add a comment, verify the resolved `{path, side, lineno}` matches the row→line mapping |
 | REQ-RND-0010  | TST-RND-0010  | Auto     | Invoke next/previous-file navigation, verify the current file advances (wrapping) and focus moves into the new-side window (old side for a pure-deletion file) |
 | REQ-RND-0011  | TST-RND-0011  | Auto     | Switch files, verify exactly one panel row carries a `CodeReviewPanelCurrent` extmark (the current file) and the panel cursor sits on it |
 | REQ-RND-0012  | TST-RND-0012  | Auto     | Open a review, verify the current window is the new-side diff window (old side for a pure-deletion file), not the panel |
+| REQ-RND-0013  | TST-RND-0013  | Auto     | Render a nested file set; verify the panel shows an indented tree with guide connectors, one directory segment per row, directories-first alphabetical order, and an over-long basename abbreviated to `stem~.ext` keeping its extension |
+| REQ-RND-0014  | TST-RND-0014  | Auto     | Set config.values.panel_width and open a review; verify the panel window width equals the configured value |
+| REQ-RND-0015  | TST-RND-0015  | Auto     | Open a review; verify the panel window has no number/fold column and signcolumn auto, and each diff window has number on, relativenumber off, foldcolumn 0, signcolumn auto, and a tight numberwidth |
 | REQ-LSP-0002  | TST-LSP-0002  | Auto     | Open the comment float and summary float, verify both have filetype `codereview` (covered by `test_12_float_filetype.sh`) |
 | REQ-LSP-0003  | TST-LSP-0003  | Auto     | Open the comment float, verify no LSPs are attached after the filetype is set |
 | REQ-RND-0005  | TST-LSP-0001  | Auto     | Start a review whose diff includes a `.md` file; assert no LSP client is attached to either diff buffer (consequence of `buftype=nofile`) |

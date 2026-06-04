@@ -45,7 +45,14 @@ local function lock_diff_win(win)
   vim.wo[win].scrollbind = true
   vim.wo[win].cursorbind = true
   vim.wo[win].wrap = false
+  -- Keep line numbers, but trim the rest of the gutter (REQ-RND-0015): absolute
+  -- numbers (not LazyVim's relative), a tight number column that auto-grows, no
+  -- fold column, and a sign column only when a +/~/- or comment sign is present.
   vim.wo[win].number = true
+  vim.wo[win].relativenumber = false
+  vim.wo[win].numberwidth = 2
+  vim.wo[win].foldcolumn = "0"
+  vim.wo[win].signcolumn = "auto"
 end
 
 function View.new()
@@ -88,11 +95,18 @@ function M.open(diff_info, opts)
   local panel_win = vim.api.nvim_get_current_win()
   vim.api.nvim_win_set_buf(panel_win, panel_buf)
   self.panel_win = panel_win
-  -- Reserve a gutter so the 📄 file-comment sign has somewhere to land
-  -- (panel.lua, REQ-UIX-0006).
-  vim.wo[panel_win].signcolumn = "yes"
-  -- Panel on the left, narrow.
+  -- A file tree has no use for line numbers or a fold column; disable them so
+  -- inherited globals (e.g. LazyVim's number/relativenumber) don't steal columns
+  -- from the tree (REQ-RND-0015). signcolumn "auto" still shows the 📄
+  -- file-comment sign on demand (panel.lua, REQ-UIX-0006).
+  vim.wo[panel_win].number = false
+  vim.wo[panel_win].relativenumber = false
+  vim.wo[panel_win].foldcolumn = "0"
+  vim.wo[panel_win].signcolumn = "auto"
+  -- Panel on the left, slim. Stashed so the panel can size its tree rows and
+  -- abbreviate over-long names to the available width (REQ-RND-0013/0014).
   local panel_width = opts.panel_width or 30
+  self.panel_width = panel_width
 
   -- Open the old diff window to the right of the panel.
   vim.cmd("vertical rightbelow split")
@@ -101,8 +115,11 @@ function M.open(diff_info, opts)
   vim.cmd("vertical rightbelow split")
   local new_win = vim.api.nvim_get_current_win()
 
-  -- Size the panel.
+  -- Size the panel, then pin it: winfixwidth keeps the slim width when focus
+  -- moves between windows (otherwise 'winwidth' bumps whichever window is
+  -- current up to its minimum, and 'equalalways' re-spreads on splits).
   pcall(vim.api.nvim_win_set_width, panel_win, panel_width)
+  vim.wo[panel_win].winfixwidth = true
 
   self.old_win = old_win
   self.new_win = new_win
