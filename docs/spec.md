@@ -332,8 +332,8 @@ Default mappings (user configurable; see REQ-UIX-0008):
 | `<leader>RN` | diff/panel    | Previous changed file                   |
 | `]c`         | diff panel    | Jump to next change (hunk)              |
 | `[c`         | diff panel    | Jump to previous change (hunk)          |
-| `<leader>Rc` | diff panel    | Add line comment at cursor              |
-| `<leader>Rf` | file panel    | Add file-level comment for the file shown in the diff (resolved via `render.current_path()`) |
+| `<leader>Rr` | diff panel    | Add line comment at cursor              |
+| `<leader>RR` | file panel    | Add file-level comment for the file shown in the diff (resolved via `render.current_path()`) |
 | `<leader>Rd` | diff panel    | Delete comment at cursor                |
 | `<leader>Rs` | any           | Show review summary and submit          |
 | `<leader>Rq` | any           | Cancel review                           |
@@ -447,8 +447,8 @@ require("code-review").setup({
     prev_file = "<leader>RN",
     next_change = "]c",
     prev_change = "[c",
-    add_comment = "<leader>Rc",
-    file_comment = "<leader>Rf",
+    add_comment = "<leader>Rr",
+    file_comment = "<leader>RR",
     delete_comment = "<leader>Rd",
     summary = "<leader>Rs",
     cancel = "<leader>Rq",
@@ -893,8 +893,8 @@ to proceed, create no review file, and exit with code 2 (see section 4.9).
 **REQ-UIX-0008** (Ubiquitous): Default action keybindings shall use the
 `<leader>R` prefix (Review) to avoid collision with common LazyVim/which-key
 `<leader>c*` (code) bindings. Defaults: `<leader>Rn` (next file),
-`<leader>RN` (previous file), `<leader>Rc` (add line comment),
-`<leader>Rf` (file comment), `<leader>Rd` (delete comment), `<leader>Rs`
+`<leader>RN` (previous file), `<leader>Rr` (add line comment),
+`<leader>RR` (file comment), `<leader>Rd` (delete comment), `<leader>Rs`
 (submit / show summary), `<leader>Rq` (cancel), `<leader>Rp` (pause), and
 `<C-s>` (confirm comment in float). Motion keys are the exception: change
 navigation uses the bracket convention `]c`/`[c` (REQ-UIX-0012). All keybindings
@@ -1151,7 +1151,7 @@ numeric `[count]`, and keeping both diff windows aligned.
 | REQ-CLI-0006  | TST-CLI-0006  | Auto     | In interactive mode, start review and run `:CodeReviewCancel`, verify nvim stays running and a notification is shown; in agent mode, verify exit code 2 |
 | REQ-CLI-0007  | TST-CLI-0007  | Auto     | Start review, run `:CodeReviewPause`, verify session JSON written and `vim.notify` message contains the session ID |
 | REQ-CLI-0008  | TST-CLI-0008  | Auto     | Before session, verify `:CodeReviewSubmit` does not exist; start session, verify it exists; end session, verify it is removed |
-| REQ-UIX-0008  | TST-UIX-0008  | Auto     | Verify `vim.api.nvim_buf_get_keymap()` on a diff buffer contains the documented default keys (`<leader>Rn`, `<leader>RN`, `<leader>Rc`, `<leader>Rs`, etc.) |
+| REQ-UIX-0008  | TST-UIX-0008  | Auto     | Verify `vim.api.nvim_buf_get_keymap()` on a diff buffer contains the documented default keys (`<leader>Rn`, `<leader>RN`, `<leader>Rr`, `<leader>Rs`, etc.) |
 | REQ-UIX-0009  | TST-UIX-0009  | Auto     | Trigger `:CodeReviewSubmit`, capture the summary float content, verify it includes the markdown preamble from section 4.7 |
 | REQ-UIX-0010  | TST-UIX-0010  | Auto     | Call `setup({ keymaps = { add_comment = false, delete_comment = false } })`, start a review, verify those keys are not bound on diff buffers while other defaults are |
 | REQ-UIX-0011  | TST-UIX-0011  | Manual   | Open the comment float on a line vs a file, verify the title reads "Line comment" / "File comment: <file>" and the float is larger |

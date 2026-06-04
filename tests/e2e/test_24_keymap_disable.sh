@@ -46,10 +46,10 @@ local maps = vim.api.nvim_buf_get_keymap(bufnr, 'n')
 
 local has = { cc = false, cd = false, cs = false, cf = false, cq = false, cp = false }
 for _, m in ipairs(maps) do
-  if m.lhs == ' Rc' then has.cc = true end
+  if m.lhs == ' Rr' then has.cc = true end
   if m.lhs == ' Rd' then has.cd = true end
   if m.lhs == ' Rs' then has.cs = true end
-  if m.lhs == ' Rf' then has.cf = true end
+  if m.lhs == ' RR' then has.cf = true end
   if m.lhs == ' Rq' then has.cq = true end
   if m.lhs == ' Rp' then has.cp = true end
 end
