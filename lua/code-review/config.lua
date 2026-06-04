@@ -6,6 +6,11 @@ M.defaults = {
     -- same action), or false to disable. Buffer-local to the review buffers.
     next_file = "<leader>Rn",
     prev_file = "<leader>RN",
+    -- Jump to the next/previous changed hunk within the file. ]c/[c is the
+    -- native Vim diff-change motion (and gitsigns' default); bound buffer-local
+    -- so it wins over any global ]c/[c (REQ-RND-0016, REQ-UIX-0012).
+    next_change = "]c",
+    prev_change = "[c",
     add_comment = "<leader>Rc",
     file_comment = "<leader>Rf",
     delete_comment = "<leader>Rd",
