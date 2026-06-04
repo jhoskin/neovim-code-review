@@ -11,8 +11,8 @@ M.defaults = {
     -- so it wins over any global ]c/[c (REQ-RND-0016, REQ-UIX-0012).
     next_change = "]c",
     prev_change = "[c",
-    add_comment = "<leader>Rc",
-    file_comment = "<leader>Rf",
+    add_comment = "<leader>Rr",
+    file_comment = "<leader>RR",
     delete_comment = "<leader>Rd",
     summary = "<leader>Rs",
     cancel = "<leader>Rq",

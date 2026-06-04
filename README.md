@@ -65,8 +65,8 @@ During a review session, on diff buffers and the file panel:
 |--------------|----------------------------------------------|
 | `<leader>Rn` | Next file (focus the new-side window)        |
 | `<leader>RN` | Previous file                                |
-| `<leader>Rc` | Add/edit line comment                        |
-| `<leader>Rf` | Add/edit file comment                        |
+| `<leader>Rr` | Add/edit line comment                        |
+| `<leader>RR` | Add/edit file comment                        |
 | `<leader>Rd` | Delete comment at cursor                     |
 | `<leader>Rs` | Show summary and submit                      |
 | `<leader>Rp` | Pause session (save for later)               |
@@ -77,7 +77,7 @@ During a review session, on diff buffers and the file panel:
 The `<leader>R` prefix avoids collision with LazyVim's `<leader>c*`
 code submenu. Every keymap is configurable, and a value may be a single
 key, a list of keys, or `false` to disable. For a faster, single-keystroke
-setup (`<Tab>`/`<S-Tab>` to move between files, `c`/`C` to comment) see the
+setup (`<Tab>`/`<S-Tab>` to move between files, `r`/`R` to comment) see the
 recommended layout in [installation.md](docs/installation.md).
 
 ## Agent integration

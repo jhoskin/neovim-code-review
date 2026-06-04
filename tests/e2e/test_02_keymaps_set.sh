@@ -33,7 +33,7 @@ for _, side_name in ipairs({ 'a', 'b' }) do
     table.insert(lines, side_name .. '_keymap_count=' .. tostring(#maps))
     local has_rc, has_rs, has_rd = false, false, false
     for _, m in ipairs(maps) do
-      if m.lhs == ' Rc' then has_rc = true end
+      if m.lhs == ' Rr' then has_rc = true end
       if m.lhs == ' Rs' then has_rs = true end
       if m.lhs == ' Rd' then has_rd = true end
     end
@@ -69,11 +69,11 @@ a_has_rc=$(grep '^a_has_rc=' /tmp/cr-keymap-check.txt | cut -d= -f2 || echo "mis
 b_has_rc=$(grep '^b_has_rc=' /tmp/cr-keymap-check.txt | cut -d= -f2 || echo "missing")
 
 if [ "$a_has_rc" = "true" ] && [ "$b_has_rc" = "true" ]; then
-  echo "PASS: <leader>Rc keymap set on both old (a) and new (b) diff buffers"
+  echo "PASS: <leader>Rr keymap set on both old (a) and new (b) diff buffers"
 elif [ "$b_has_rc" = "true" ]; then
-  echo "PARTIAL: <leader>Rc on new side only"
+  echo "PARTIAL: <leader>Rr on new side only"
   exit 1
 else
-  echo "FAIL: <leader>Rc not set"
+  echo "FAIL: <leader>Rr not set"
   exit 1
 fi

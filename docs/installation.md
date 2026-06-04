@@ -24,7 +24,7 @@ nothing else to install.
 A few terms are used throughout this guide:
 
 - `<leader>` is Neovim's user-configurable prefix key, set with
-  `vim.g.mapleader`. The default is `\`, so unconfigured `<leader>Rc`
+  `vim.g.mapleader`. The default is `\`, so unconfigured `<leader>Rr`
   means `\Rc`. Most Neovim users set it to space with
   `vim.g.mapleader = " "`.
 - A review session begins when you run `:CodeReview` and ends when you
@@ -196,7 +196,7 @@ entry below.
 1. `cd` into any git repository with at least one uncommitted change.
 2. Run `nvim` and then `:CodeReview`. The review opens with the
    working-tree changes side-by-side.
-3. Put your cursor on a changed line. Press `<leader>Rc`. A floating
+3. Put your cursor on a changed line. Press `<leader>Rr`. A floating
    window prompts for a comment. Type, then press `<C-s>` to confirm.
 4. Press `<leader>Rs` to preview the review and submit it. The plugin
    writes a JSON file under
@@ -218,8 +218,8 @@ require("code-review").setup({
   keymaps = {
     next_file       = "<leader>Rn",  -- next changed file (focus new side)
     prev_file       = "<leader>RN",  -- previous changed file
-    add_comment     = "<leader>Rc",  -- line comment at cursor
-    file_comment    = "<leader>Rf",  -- file-level comment
+    add_comment     = "<leader>Rr",  -- line comment at cursor
+    file_comment    = "<leader>RR",  -- file-level comment
     delete_comment  = "<leader>Rd",  -- delete comment at cursor
     summary         = "<leader>Rs",  -- show summary, then submit
     cancel          = "<leader>Rq",  -- discard review, close
@@ -259,7 +259,7 @@ default. The same is true when you pass the table via lazy.nvim's
   main = "code-review",
   opts = {
     keymaps = {
-      -- A value is a string, a list of keys ({ "c", "<leader>Rc" }), or false.
+      -- A value is a string, a list of keys ({ "r", "<leader>Rr" }), or false.
       add_comment = "<leader>rc", -- remap to lowercase prefix
       cancel      = false,        -- disable default; bind yourself
     },
@@ -297,16 +297,16 @@ so which-key shows them under the `<leader>R` group as soon as you hit
 |--------------|-----------------------------------------|:------------:|:----------:|
 | `<leader>Rn` | Next file (focus the new-side window)   | yes          | yes        |
 | `<leader>RN` | Previous file                           | yes          | yes        |
-| `<leader>Rc` | Add/edit line comment at cursor         | yes          | no         |
+| `<leader>Rr` | Add/edit line comment at cursor         | yes          | no         |
 | `<leader>Rd` | Delete comment at cursor                | yes          | no         |
-| `<leader>Rf` | Add/edit file-level comment             | yes          | yes        |
+| `<leader>RR` | Add/edit file-level comment             | yes          | yes        |
 | `<leader>Rs` | Show summary and submit                 | yes          | yes        |
 | `<leader>Rp` | Pause session (save for later)          | yes          | yes        |
 | `<leader>Rq` | Cancel review (discard)                 | yes          | yes        |
 | `<C-s>`      | Confirm and save the comment in the input float | float only | float only |
 | `q`          | Cancel comment/summary (in float; hardcoded, not in `keymaps`) | float only | float only |
 
-`<leader>Rc` and `<leader>Rd` are absent from the file panel because
+`<leader>Rr` and `<leader>Rd` are absent from the file panel because
 the panel has no cursor "line" to anchor a line comment to.
 
 ## Commands
@@ -345,12 +345,12 @@ have nothing else on `<leader>r`, remapping to lowercase via
       -- Single key (fast) + <leader>R* (discoverable in which-key). The maps
       -- are buffer-local to the review's nofile buffers, so they don't affect
       -- normal editing. Destructive actions keep only <leader>R* so a stray
-      -- key can't end a review.
+      -- key can't end a review. r/R sit clear of the ]c/[c change-motion and are inert in the read-only buffers.
       keymaps = {
         next_file    = { "<Tab>",   "<leader>Rn" },
         prev_file    = { "<S-Tab>", "<leader>RN" },
-        add_comment  = { "c",       "<leader>Rc" }, -- line comment (diff)
-        file_comment = { "C",       "<leader>Rf" }, -- file comment (panel/diff)
+        add_comment  = { "r",       "<leader>Rr" }, -- line comment (diff)
+        file_comment = { "R",       "<leader>RR" }, -- file comment (panel/diff)
       },
     },
 ```
@@ -532,7 +532,7 @@ Git could not resolve the revision you passed. Common causes:
 - You passed a path instead of a revision; quote ranges that contain
   `..` to avoid shell expansion.
 
-#### `<leader>Rc` has no effect in a diff buffer
+#### `<leader>Rr` has no effect in a diff buffer
 
 The plugin binds its keymaps when you launch the review with
 `:CodeReview`; the renderer applies them to the diff buffers and the
@@ -540,7 +540,7 @@ file panel as it builds them. If a key has no effect, confirm you are
 in a buffer the renderer created and that `setup()` ran.
 
 1. Confirm the keymap is bound on the buffer:
-   `:verbose nmap <leader>Rc`. The output should name a buffer-local
+   `:verbose nmap <leader>Rr`. The output should name a buffer-local
    mapping defined in `lua/code-review/init.lua`.
 2. Confirm `setup()` ran. With lazy.nvim's `cmd =` lazy spec, this is
    delayed until the first `:CodeReview`. Check that your `opts = {}` /
