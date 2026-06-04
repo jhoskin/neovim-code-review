@@ -285,6 +285,7 @@ describe("render/init orchestration", function()
     local repo = make_repo()
     in_dir(repo, function()
       local info = diff.resolve_shas(diff.parse_range(nil))
+      eq(config.defaults.panel_width, 40, "default panel width is 40")
       local saved = config.values.panel_width
       config.values.panel_width = 18
       local view = render.open(info, Store.new())

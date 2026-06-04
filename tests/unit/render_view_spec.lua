@@ -88,6 +88,25 @@ describe("render/view layout", function()
     v:close()
   end)
 
+  -- Covers: TST-RND-0015 (trimmed window gutters across the review windows).
+  it("reserves only necessary gutter columns (TST-RND-0015)", function()
+    local v = open_view()
+    -- File tree: no line numbers and no fold column; sign column on demand.
+    eq(vim.wo[v.panel_win].number, false, "panel has no line numbers")
+    eq(vim.wo[v.panel_win].relativenumber, false, "panel has no relative numbers")
+    eq(vim.wo[v.panel_win].foldcolumn, "0", "panel has no fold column")
+    eq(vim.wo[v.panel_win].signcolumn, "auto", "panel sign column is on demand")
+    -- Diff windows: keep absolute line numbers, drop the rest of the gutter.
+    for _, win in ipairs({ v.old_win, v.new_win }) do
+      eq(vim.wo[win].number, true, "diff keeps line numbers")
+      eq(vim.wo[win].relativenumber, false, "diff numbers are absolute")
+      eq(vim.wo[win].numberwidth, 2, "diff number column is tight")
+      eq(vim.wo[win].foldcolumn, "0", "diff has no fold column")
+      eq(vim.wo[win].signcolumn, "auto", "diff sign column is on demand")
+    end
+    v:close()
+  end)
+
   it("registry resolves win -> side correctly", function()
     local v = open_view()
     eq(v.registry[v.old_win].side, "old")

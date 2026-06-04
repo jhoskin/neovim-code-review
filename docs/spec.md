@@ -260,7 +260,7 @@ The primary screen. Rendered by the plugin's built-in side-by-side diff
 renderer.
 
 **Layout**: a file-panel + diff-panel layout. The file panel presents changed
-files as a compact, indented directory tree (slim, configurable width). The diff
+files as a compact, indented directory tree (indented, configurable width). The diff
 panel shows the side-by-side old/new diff for the selected file.
 
 **Comment rendering**: Existing comments appear as extmarks with virtual text
@@ -1059,9 +1059,16 @@ panel's inner width with a `~` marker — a file basename keeps its extension
 (`prefix~`).
 
 **REQ-RND-0014** (Ubiquitous): The file panel width shall be configurable via
-`config.values.panel_width` (default 20 columns), applied to the panel window on
+`config.values.panel_width` (default 40 columns), applied to the panel window on
 open and pinned (`winfixwidth`) so it keeps that width as focus moves between
 windows.
+
+**REQ-RND-0015** (Ubiquitous): The review windows shall reserve only gutter
+columns that carry information. The file panel shall show no line-number column
+and no fold column (a sign column on demand only, for the 📄 file-comment
+indicator). Each diff window shall keep absolute line numbers (no
+`relativenumber`) with a minimal `numberwidth`, no fold column, and a sign
+column shown on demand.
 
 ## 7. Verification Matrix
 
@@ -1138,6 +1145,7 @@ windows.
 | REQ-RND-0012  | TST-RND-0012  | Auto     | Open a review, verify the current window is the new-side diff window (old side for a pure-deletion file), not the panel |
 | REQ-RND-0013  | TST-RND-0013  | Auto     | Render a nested file set; verify the panel shows an indented tree with guide connectors, one directory segment per row, directories-first alphabetical order, and an over-long basename abbreviated to `stem~.ext` keeping its extension |
 | REQ-RND-0014  | TST-RND-0014  | Auto     | Set config.values.panel_width and open a review; verify the panel window width equals the configured value |
+| REQ-RND-0015  | TST-RND-0015  | Auto     | Open a review; verify the panel window has no number/fold column and signcolumn auto, and each diff window has number on, relativenumber off, foldcolumn 0, signcolumn auto, and a tight numberwidth |
 | REQ-LSP-0002  | TST-LSP-0002  | Auto     | Open the comment float and summary float, verify both have filetype `codereview` (covered by `test_12_float_filetype.sh`) |
 | REQ-LSP-0003  | TST-LSP-0003  | Auto     | Open the comment float, verify no LSPs are attached after the filetype is set |
 | REQ-RND-0005  | TST-LSP-0001  | Auto     | Start a review whose diff includes a `.md` file; assert no LSP client is attached to either diff buffer (consequence of `buftype=nofile`) |
