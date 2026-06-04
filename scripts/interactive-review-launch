@@ -8,14 +8,14 @@
 #
 # The review runs in a detached tmux session on its own explicit socket. That
 # session is the durable supervisor and the source of truth for state: it
-# outlives this script, the iTerm tab, and even iTerm itself. The session's
-# existence IS the running/finished state, so:
-#   - closing the review tab only DETACHES a client; the session survives and is
-#     reattachable, and `wait` still completes when the review ends;
+# outlives this script, the Ghostty window, and even Ghostty itself. The
+# session's existence IS the running/finished state, so:
+#   - closing the review window only DETACHES a client; the session survives and
+#     is reattachable, and `wait` still completes when the review ends;
 #   - if the session is killed without a submit (crash / forced close), `status`
 #     and `wait` detect "aborted" promptly instead of hanging.
 # An explicit `-S` socket gives that durable server a fixed address so every
-# client (this script, the iTerm tab, your own terminal) reaches the same one.
+# client (this script, the Ghostty window, your own terminal) reaches the same one.
 #
 # Subcommands:
 #   start [<git-range>]      spawn the review; print a HANDLE on stdout, exit 0
@@ -30,7 +30,7 @@
 #                            demand or from cron/launchd.
 #   <git-range> | (nothing)  legacy: start + wait in one blocking call
 #
-# When the review reaches a terminal state, the iTerm2 tab, the tmux session,
+# When the review reaches a terminal state, the Ghostty window, the tmux session,
 # and the temp files are cleaned up. Anything missed (a start that was never
 # waited on) is reaped by the next `start`'s sweep or an explicit `gc`.
 #
@@ -41,8 +41,9 @@
 #   3  still running (status only)
 #
 # Dependencies: bash, tmux, jq, nvim (+ the neovim-code-review plugin).
-# Optional: it2 CLI for automatic iTerm2 tab attachment (otherwise the script
-# prints the `tmux -S … attach` command to run yourself).
+# On macOS the review is surfaced in a new Ghostty window via AppleScript
+# (osascript). If that fails, the script prints the `tmux -S … attach` command
+# to run yourself.
 
 set -euo pipefail
 
@@ -68,7 +69,7 @@ reject_unsafe_range() {
 }
 
 # Spawn a review. Sets HANDLE (= the result-file path) and writes <handle>.state
-# recording the tmux session and iTerm tab id. Diagnostics go to stderr; nothing
+# recording the tmux session and socket. Diagnostics go to stderr; nothing
 # is written to stdout.
 spawn_review() {
   local range="${1:-}"
@@ -86,7 +87,7 @@ spawn_review() {
   session="code-review-${base//[!A-Za-z0-9_]/-}"
   sentinel="$HANDLE.done"
   # Use a dedicated, explicit tmux socket so the session is created on the SAME
-  # server the attach (iTerm tab, or a manual command) connects to. Without it,
+  # server the attach (Ghostty window, or a manual command) connects to. Without it,
   # when the launcher runs in an environment whose $TMUX / $TMUX_TMPDIR differs
   # from the attaching terminal's, the session lands on one server and `tmux
   # attach` looks at another -> "no sessions". The socket lives in the fixed
@@ -103,13 +104,12 @@ spawn_review() {
     exit 1
   fi
 
-  local tab_sid=""
-  if command -v it2 >/dev/null 2>&1; then
-    it2 tab new >/dev/null
-    tab_sid=$(it2 session get-var id 2>/dev/null || true)
-    it2 session set-name "code review" >/dev/null 2>&1 || true
-    it2 run "tmux -S $sock attach -t $session" >/dev/null
-    printf 'Review opened in a new iTerm2 tab (tmux session: %s).\n' "$session" >&2
+  # Surface the review in a new Ghostty window. AppleScript is Ghostty's official
+  # automation interface; `wait after command` defaults false, so the window
+  # closes itself when the review ends and the tmux attach exits — nothing to
+  # track. If AppleScript fails, print the manual attach command.
+  if osascript -e "tell application \"Ghostty\" to new window with configuration {command:\"tmux -S $sock attach -t $session\"}" >/dev/null 2>&1; then
+    printf 'Review opened in a new Ghostty window (tmux session: %s).\n' "$session" >&2
   else
     printf 'Attach to the review with:  tmux -S %s attach -t %s\n' "$sock" "$session" >&2
   fi
@@ -118,7 +118,6 @@ spawn_review() {
   {
     printf 'started=%s\n' "$(date +%s)"
     printf 'session=%s\n' "$session"
-    printf 'tab_sid=%s\n' "$tab_sid"
     printf 'sock=%s\n' "$sock"
   } > "$HANDLE.state"
 }
@@ -144,19 +143,17 @@ gc_sweep() {
   done
 }
 
-# Read <handle>.state into STATE_SESSION / STATE_SOCK / STATE_TAB_SID (empty if
-# absent). Parsed line-by-line, never sourced.
+# Read <handle>.state into STATE_SESSION / STATE_SOCK (empty if absent). Parsed
+# line-by-line, never sourced.
 read_state() {
   STATE_SESSION=""
   STATE_SOCK=""
-  STATE_TAB_SID=""
   local k v
   [ -f "$1.state" ] || return 0
   while IFS='=' read -r k v; do
     case "$k" in
       session) STATE_SESSION="$v" ;;
       sock) STATE_SOCK="$v" ;;
-      tab_sid) STATE_TAB_SID="$v" ;;
     esac
   done < "$1.state"
 }
@@ -167,13 +164,15 @@ session_alive() {
     && tmux -S "$STATE_SOCK" has-session -t "$STATE_SESSION" 2>/dev/null
 }
 
-# Tear down the review's tmux session, iTerm tab, and temp files. Idempotent.
+# Tear down the review's tmux session and temp files. Idempotent. Killing the
+# tmux session makes the attached Ghostty window's `tmux attach` exit, and the
+# window closes itself (wait-after-command defaults false), so there is no
+# window to close explicitly.
 cleanup_review() {
   local handle="$1"
   read_state "$handle"
   [ -n "$STATE_SOCK" ] && [ -n "$STATE_SESSION" ] \
     && tmux -S "$STATE_SOCK" kill-session -t "$STATE_SESSION" 2>/dev/null || true
-  { [ -n "$STATE_TAB_SID" ] && it2 session close -s "$STATE_TAB_SID" -f; } >/dev/null 2>&1 || true
   rm -f "$handle" "$handle.done" "$handle.state"
   [ -n "$STATE_SOCK" ] && rm -f "$STATE_SOCK" || true
 }

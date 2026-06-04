@@ -6,8 +6,8 @@ for a review and read your feedback as JSON.
 
 - `commands/interactive-review.md` — the slash command.
 - `../scripts/interactive-review-launch` — the launcher it runs (spawns Neovim
-  in a tmux PTY, opens an iTerm2 tab, returns the review JSON, and closes the
-  tab when the review exits).
+  in a tmux PTY, opens a Ghostty window, returns the review JSON, and closes the
+  window when the review exits).
 
 ## Install
 

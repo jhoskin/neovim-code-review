@@ -8,7 +8,7 @@ Hand control to the user for an interactive code review, then read the JSON they
 
 Do not read other files first.
 
-Step 1 — start the review. This returns immediately and prints a HANDLE on stdout (the iTerm tab opens for the user):
+Step 1 — start the review. This returns immediately and prints a HANDLE on stdout (the Ghostty window opens for the user):
 
 ```bash
 ~/.claude/scripts/interactive-review-launch start "${ARGUMENTS:-}"

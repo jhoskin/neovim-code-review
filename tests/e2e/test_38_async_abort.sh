@@ -2,15 +2,15 @@
 # Test 38: failure handling. If the durable review session is killed without a
 # submit (a crash or forced close, NOT a tab close -- a tab close only detaches),
 # `wait` detects the aborted review and returns promptly (exit 2) instead of
-# hanging until its timeout. it2 is stubbed so no real iTerm tab opens.
+# hanging until its timeout. osascript is stubbed so no real Ghostty window opens.
 set -uo pipefail
 source "$(dirname "$0")/lib.sh"
 
 LAUNCH="$PLUGIN_ROOT/scripts/interactive-review-launch"
 
-stub=$(mktemp -d -t cr-it2-stub.XXXXXX)
-printf '#!/usr/bin/env bash\nexit 0\n' > "$stub/it2"
-chmod +x "$stub/it2"
+stub=$(mktemp -d -t cr-osa-stub.XXXXXX)
+printf '#!/usr/bin/env bash\nexit 0\n' > "$stub/osascript"
+chmod +x "$stub/osascript"
 export PATH="$stub:$PATH"
 
 repo=$(bash "$(dirname "$0")/setup_repo.sh")

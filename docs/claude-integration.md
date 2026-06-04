@@ -5,7 +5,7 @@ any tool that can shell out and read files) hand control over to you
 for an interactive review, then read your feedback as structured
 JSON.
 
-This guide assumes you run Claude Code locally in iTerm2,
+This guide assumes you run Claude Code locally in Ghostty,
 Terminal.app, or another terminal where Neovim can take over the
 screen interactively. Headless and remote scenarios are out of scope.
 
@@ -199,7 +199,7 @@ Hand control to the user for an interactive code review, then read the JSON they
 
 Do not read other files first.
 
-Step 1 — start the review. This returns immediately and prints a HANDLE on stdout (the iTerm tab opens for the user):
+Step 1 — start the review. This returns immediately and prints a HANDLE on stdout (the Ghostty window opens for the user):
 
 ```bash
 ~/.claude/scripts/interactive-review-launch start "${ARGUMENTS:-}"
@@ -241,8 +241,9 @@ foreground command. Run `nvim` directly and it hangs invisibly: there
 is no TTY for it to render into, and the agent's Bash call just sits
 there until the timeout fires. The bundled script wraps `nvim` in a
 detached `tmux new-session -d`, which gives Neovim its own pseudo-TTY,
-then attaches that session in a new iTerm2 tab via the `it2` CLI.
-Without iTerm2 (or without `it2` installed) the script falls back to
+then opens that session in a new Ghostty window via AppleScript
+(`osascript`, Ghostty's official automation interface). If AppleScript
+fails (Ghostty not running, or not on macOS) the script falls back to
 printing the `tmux attach -t <session>` command for you to run by hand
 in any terminal pane.
 
@@ -372,12 +373,10 @@ The Bash call runs for several seconds, then exits with no Neovim window
   yet and `:CodeReview` fired before lazy.nvim finished installing it.
   Run `:Lazy install` first, then re-invoke `/interactive-review`.
 
-No new iTerm2 tab opens; the script just prints a `tmux attach` line
-: The `it2` CLI is not on the PATH inside Claude Code's Bash
-  environment. Install it (see
-  [github.com/mkusaka/it2](https://github.com/mkusaka/it2)) or run the
-  printed `tmux attach -t <session>` command yourself in any terminal
-  pane.
+No new Ghostty window opens; the script just prints a `tmux attach` line
+: Ghostty AppleScript control failed — Ghostty is not running, or you
+  are not on macOS. Run the printed `tmux attach -t <session>` command
+  yourself in any terminal pane.
 
 `neovim error (exit ...)` and Neovim never appears
 : nvim crashed at startup. Run `nvim --headless +qa` in the same shell

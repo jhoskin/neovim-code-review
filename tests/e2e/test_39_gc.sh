@@ -2,7 +2,7 @@
 # Test 39: the launcher's garbage collector. `gc` reaps reviews older than
 # CR_GC_MAX_AGE (abandoned by a start that was never waited on) and removes dead
 # sockets, while leaving a recent in-flight review untouched. Uses an isolated
-# CR_REVIEW_DIR so it never touches real reviews. No tmux/it2 needed.
+# CR_REVIEW_DIR so it never touches real reviews. No tmux/osascript needed.
 set -uo pipefail
 source "$(dirname "$0")/lib.sh"
 
