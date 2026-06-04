@@ -4,16 +4,16 @@
 # supervisor) that is alive with NO client attached -- i.e. it survives a closed
 # tab; `status` reports running (exit 3); `wait` blocks until the review ends and
 # reports the outcome; finishing tidies up the session + state.
-# it2 is stubbed so no real iTerm tab opens during the test.
+# osascript is stubbed so no real Ghostty window opens during the test.
 set -uo pipefail
 source "$(dirname "$0")/lib.sh"
 
 LAUNCH="$PLUGIN_ROOT/scripts/interactive-review-launch"
 
-# No-op it2 stub on PATH so `start` does not open a real iTerm2 tab.
-stub=$(mktemp -d -t cr-it2-stub.XXXXXX)
-printf '#!/usr/bin/env bash\nexit 0\n' > "$stub/it2"
-chmod +x "$stub/it2"
+# No-op osascript stub on PATH so `start` does not open a real Ghostty window.
+stub=$(mktemp -d -t cr-osa-stub.XXXXXX)
+printf '#!/usr/bin/env bash\nexit 0\n' > "$stub/osascript"
+chmod +x "$stub/osascript"
 export PATH="$stub:$PATH"
 
 repo=$(bash "$(dirname "$0")/setup_repo.sh")
