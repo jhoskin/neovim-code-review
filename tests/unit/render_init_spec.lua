@@ -13,6 +13,7 @@ local render = require("code-review.render")
 local diff = require("code-review.diff")
 local Store = require("code-review.store")
 local config = require("code-review.config")
+local paint = require("code-review.render.paint")
 
 -- Run a git command inside `dir`, asserting success so a broken fixture fails
 -- loudly instead of silently producing an empty diff.
@@ -71,6 +72,18 @@ end
 
 local function rmrf(dir)
   vim.fn.delete(dir, "rf")
+end
+
+-- Count the structural-diff extmarks on a buffer (paint's NS: line backgrounds,
+-- gutter signs, intra spans), separate from the comment markers (NS_COMMENTS).
+local function diff_mark_count(buf)
+  local ns = vim.api.nvim_create_namespace(paint.NS)
+  return #vim.api.nvim_buf_get_extmarks(buf, ns, 0, -1, {})
+end
+
+local function comment_mark_count(buf)
+  local ns = vim.api.nvim_create_namespace(paint.NS_COMMENTS)
+  return #vim.api.nvim_buf_get_extmarks(buf, ns, 0, -1, {})
 end
 
 describe("render/init orchestration", function()
@@ -346,6 +359,357 @@ describe("render/init orchestration", function()
       -- Both diff windows stay aligned on the same row after a jump.
       eq(vim.api.nvim_win_get_cursor(view.old_win)[1], cur_row(),
         "old and new windows sit on the same row after a jump")
+
+      render.close()
+    end)
+    rmrf(base)
+  end)
+
+  -- ── Zoom (tmux-style current-side toggle) ─────────────────────────────────
+  -- Covers: TST-RND-0017.
+
+  -- Repo with two modified files that each keep both-side content (a mid-file
+  -- insertion leaves context rows on both sides). Lets zoom persist across a
+  -- file switch without the pure-add/delete swap kicking in. Files order x, y.
+  local function make_two_modified()
+    local base = vim.fn.resolve(vim.fn.tempname())
+    assert(vim.fn.mkdir(base, "p") == 1)
+    git(base, { "init", "-q" })
+    git(base, { "config", "user.email", "t@example.com" })
+    git(base, { "config", "user.name", "t" })
+    git(base, { "config", "commit.gpgsign", "false" })
+    write_file(base, "x.txt", "x1\nx2\n")
+    write_file(base, "y.txt", "y1\ny2\n")
+    git(base, { "add", "-A" })
+    git(base, { "commit", "-q", "-m", "base" })
+    write_file(base, "x.txt", "x1\nXNEW\nx2\n")
+    write_file(base, "y.txt", "y1\nYNEW\ny2\n")
+    return base
+  end
+
+  -- Repo with a single file whose one line is modified in place (shared prefix,
+  -- so it diffs as a `change` row that paints BOTH sides). Lets an unzoom assert
+  -- the diff paint returns on the old buffer too, not just the new.
+  local function make_one_change()
+    local base = vim.fn.resolve(vim.fn.tempname())
+    assert(vim.fn.mkdir(base, "p") == 1)
+    git(base, { "init", "-q" })
+    git(base, { "config", "user.email", "t@example.com" })
+    git(base, { "config", "user.name", "t" })
+    git(base, { "config", "commit.gpgsign", "false" })
+    write_file(base, "m.txt", "keep\nvalue = 1\n")
+    git(base, { "add", "-A" })
+    git(base, { "commit", "-q", "-m", "base" })
+    write_file(base, "m.txt", "keep\nvalue = 2\n")
+    return base
+  end
+
+  -- Covers: TST-RND-0017 (zoom the current side; survivor keeps comment mapping).
+  it("toggle_zoom from the new window keeps only the new side and still maps rows", function()
+    local repo = make_repo()
+    in_dir(repo, function()
+      local info = diff.resolve_shas(diff.parse_range(nil))
+      local view = render.open(info, Store.new())
+      render.switch_file("a.txt")
+      vim.api.nvim_set_current_win(view.new_win)
+
+      render.toggle_zoom()
+      eq(view.zoomed_side, "new", "zoomed onto the new side")
+      ok(vim.api.nvim_win_is_valid(view.new_win), "new window survives")
+      H.assert.is_nil(view.old_win, "old window is hidden (win field cleared)")
+
+      -- The surviving new window still anchors comments: row 2 is the insertion.
+      vim.api.nvim_win_set_cursor(view.new_win, { 2, 0 })
+      local ctx = render.cursor_context()
+      ok(ctx ~= nil, "cursor_context resolves on the zoomed new side")
+      eq(ctx.path, "a.txt")
+      eq(ctx.side, "new")
+      eq(ctx.lineno, 2)
+
+      render.close()
+    end)
+    rmrf(repo)
+  end)
+
+  -- Covers: TST-RND-0017 (zoom persists across a same-content file switch).
+  it("next_file while zoomed keeps the zoomed side", function()
+    local repo = make_two_modified()
+    in_dir(repo, function()
+      local info = diff.resolve_shas(diff.parse_range(nil))
+      local view = render.open(info, Store.new())
+      eq(render.current_path(), "x.txt", "opens on the first modified file")
+
+      vim.api.nvim_set_current_win(view.new_win)
+      render.toggle_zoom()
+      eq(view.zoomed_side, "new", "zoomed onto the new side")
+
+      render.next_file()
+      eq(render.current_path(), "y.txt", "next_file advanced to the second file")
+      eq(view.zoomed_side, "new", "zoom stays on the new side across the switch")
+      H.assert.is_nil(view.old_win, "old window stays hidden")
+      eq(vim.api.nvim_get_current_win(), view.new_win, "focus stays in the new side")
+
+      render.close()
+    end)
+    rmrf(repo)
+  end)
+
+  -- Covers: TST-RND-0017 (zoom swaps to the side with content on a pure diff).
+  it("next_file into a pure-deletion file while zoomed on new swaps zoom to old", function()
+    local base = vim.fn.resolve(vim.fn.tempname())
+    assert(vim.fn.mkdir(base, "p") == 1)
+    git(base, { "init", "-q" })
+    git(base, { "config", "user.email", "t@example.com" })
+    git(base, { "config", "user.name", "t" })
+    git(base, { "config", "commit.gpgsign", "false" })
+    write_file(base, "keep.txt", "k1\nk2\n")
+    write_file(base, "del.txt", "d1\nd2\n")
+    git(base, { "add", "-A" })
+    git(base, { "commit", "-q", "-m", "base" })
+    write_file(base, "keep.txt", "k1\nKNEW\nk2\n") -- modified: both-side content
+    assert(os.remove(base .. "/del.txt")) -- pure deletion: no new-side content
+
+    in_dir(base, function()
+      local info = diff.resolve_shas(diff.parse_range(nil))
+      local view = render.open(info, Store.new())
+
+      -- Start zoomed on keep.txt's new side (del.txt sorts first, so switch).
+      render.switch_file("keep.txt")
+      vim.api.nvim_set_current_win(view.new_win)
+      render.toggle_zoom()
+      eq(view.zoomed_side, "new", "zoomed onto keep.txt's new side")
+
+      -- next_file wraps to del.txt (a pure deletion): zoom must swap to old.
+      render.next_file()
+      eq(render.current_path(), "del.txt", "advanced to the deleted file")
+      eq(view.zoomed_side, "old", "zoom swapped to the side with content")
+      H.assert.is_nil(view.new_win, "new window is hidden after the swap")
+      ok(vim.api.nvim_win_is_valid(view.old_win), "old window is the survivor")
+      eq(vim.api.nvim_get_current_win(), view.old_win, "focus followed to the old side")
+
+      render.close()
+    end)
+    rmrf(base)
+  end)
+
+  -- Covers: TST-RND-0017 (unzoom re-syncs both windows onto the same row).
+  it("next_change while zoomed then unzoom leaves both windows on the same row", function()
+    local base = vim.fn.resolve(vim.fn.tempname())
+    assert(vim.fn.mkdir(base, "p") == 1)
+    git(base, { "init", "-q" })
+    git(base, { "config", "user.email", "t@example.com" })
+    git(base, { "config", "user.name", "t" })
+    git(base, { "config", "commit.gpgsign", "false" })
+    write_file(base, "f.txt", "1\n2\n3\n4\n")
+    git(base, { "add", "-A" })
+    git(base, { "commit", "-q", "-m", "base" })
+    write_file(base, "f.txt", "1\nNEW\n2\n3\nALSO\n4\n") -- hunks at rows 2 and 5
+
+    in_dir(base, function()
+      local info = diff.resolve_shas(diff.parse_range(nil))
+      local view = render.open(info, Store.new())
+      eq(render.current_path(), "f.txt", "single changed file")
+
+      vim.api.nvim_set_current_win(view.new_win)
+      render.toggle_zoom()
+      eq(view.zoomed_side, "new", "zoomed onto the new side")
+
+      render.next_change()
+      eq(vim.api.nvim_win_get_cursor(view.new_win)[1], 2, "next_change moved to the first hunk")
+
+      view:unzoom()
+      H.assert.is_nil(view.zoomed_side, "no longer zoomed")
+      ok(vim.api.nvim_win_is_valid(view.old_win), "old window restored")
+      eq(vim.api.nvim_win_get_cursor(view.old_win)[1], vim.api.nvim_win_get_cursor(view.new_win)[1],
+        "old and new windows re-synced onto the same row")
+
+      render.close()
+    end)
+    rmrf(base)
+  end)
+
+  -- Covers: TST-RND-0017 (zoom from the panel keeps panel focus; toggle restores).
+  it("toggle_zoom from the panel zooms new, keeps panel focus, and restores", function()
+    local repo = make_repo()
+    in_dir(repo, function()
+      local info = diff.resolve_shas(diff.parse_range(nil))
+      local view = render.open(info, Store.new())
+      render.switch_file("a.txt")
+
+      vim.api.nvim_set_current_win(view.panel_win)
+      render.toggle_zoom()
+      eq(view.zoomed_side, "new", "panel zoom targets the primary (new) side")
+      H.assert.is_nil(view.old_win, "old window hidden")
+      ok(vim.api.nvim_win_is_valid(view.new_win), "new window survives")
+      eq(vim.api.nvim_get_current_win(), view.panel_win, "focus stays in the panel")
+
+      render.toggle_zoom()
+      H.assert.is_nil(view.zoomed_side, "toggle again unzoomed")
+      ok(vim.api.nvim_win_is_valid(view.old_win), "old window restored")
+      ok(vim.api.nvim_win_is_valid(view.new_win), "new window still valid")
+      ok(vim.api.nvim_win_is_valid(view.panel_win), "panel still valid")
+      eq(vim.api.nvim_get_current_win(), view.panel_win, "focus still in the panel")
+
+      render.close()
+    end)
+    rmrf(repo)
+  end)
+
+  -- Covers: TST-RND-0017 (review_windows counts the survivors while zoomed).
+  it("review_windows returns two windows while zoomed and three unzoomed", function()
+    local repo = make_repo()
+    in_dir(repo, function()
+      local info = diff.resolve_shas(diff.parse_range(nil))
+      local view = render.open(info, Store.new())
+      render.switch_file("a.txt")
+      eq(#render.review_windows(), 3, "three windows before zooming")
+
+      vim.api.nvim_set_current_win(view.new_win)
+      render.toggle_zoom()
+      eq(view.zoomed_side, "new", "zoomed onto the new side")
+      -- The hidden old side's win field is nil; review_windows must not stop at
+      -- that nil hole and drop the surviving new + panel windows.
+      eq(#render.review_windows(), 2, "panel + new side survive the zoom")
+
+      render.toggle_zoom()
+      H.assert.is_nil(view.zoomed_side, "unzoomed")
+      eq(#render.review_windows(), 3, "all three windows back after unzoom")
+
+      render.close()
+    end)
+    rmrf(repo)
+  end)
+
+  -- Covers: TST-RND-0017 (_side_has_content over only-old, only-new, mixed rows).
+  it("_side_has_content detects per-side content in a model", function()
+    local only_old = { rows = { { old_lineno = 1, new_lineno = nil } } }
+    ok(render._side_has_content(only_old, "old"), "only-old model has old content")
+    ok(not render._side_has_content(only_old, "new"), "only-old model has no new content")
+
+    local only_new = { rows = { { old_lineno = nil, new_lineno = 1 } } }
+    ok(render._side_has_content(only_new, "new"), "only-new model has new content")
+    ok(not render._side_has_content(only_new, "old"), "only-new model has no old content")
+
+    local mixed = { rows = {
+      { old_lineno = 1, new_lineno = 1 },
+      { old_lineno = nil, new_lineno = 2 },
+      { old_lineno = 2, new_lineno = nil },
+    } }
+    ok(render._side_has_content(mixed, "old"), "mixed model has old content")
+    ok(render._side_has_content(mixed, "new"), "mixed model has new content")
+  end)
+
+  -- ── Zoom shows plain syntax on the survivor (REQ-RND-0018) ────────────────
+  -- Covers: TST-RND-0018.
+
+  -- Covers: TST-RND-0018 (zoom strips the survivor's diff paint; comments stay).
+  it("toggle_zoom clears the survivor's diff paint but keeps comment markers", function()
+    local repo = make_repo()
+    in_dir(repo, function()
+      local info = diff.resolve_shas(diff.parse_range(nil))
+      local store = Store.new()
+      local view = render.open(info, store)
+      render.switch_file("a.txt")
+
+      -- A comment on the new side (row 2 is the insertion) lives in the comments
+      -- namespace and must outlive the zoom.
+      store:add_line_comment("a.txt", nil, 2, "new", "note")
+      render.repaint_comments()
+      ok(diff_mark_count(view.new_buf) >= 1, "diff paint present before zoom")
+      ok(comment_mark_count(view.new_buf) >= 1, "comment marker present before zoom")
+
+      vim.api.nvim_set_current_win(view.new_win)
+      render.toggle_zoom()
+      eq(view.zoomed_side, "new", "zoomed onto the new side")
+
+      eq(diff_mark_count(view.new_buf), 0, "survivor has no diff paint while zoomed")
+      ok(comment_mark_count(view.new_buf) >= 1, "comment marker still shown while zoomed")
+
+      render.close()
+    end)
+    rmrf(repo)
+  end)
+
+  -- Covers: TST-RND-0018 (unzoom restores the full diff paint on both buffers).
+  it("toggle_zoom twice restores diff paint on both buffers", function()
+    local repo = make_one_change()
+    in_dir(repo, function()
+      local info = diff.resolve_shas(diff.parse_range(nil))
+      local view = render.open(info, Store.new())
+      eq(render.current_path(), "m.txt", "single changed file")
+      -- The in-place change paints both sides before any zoom.
+      ok(diff_mark_count(view.old_buf) >= 1, "old buffer painted before zoom")
+      ok(diff_mark_count(view.new_buf) >= 1, "new buffer painted before zoom")
+
+      vim.api.nvim_set_current_win(view.new_win)
+      render.toggle_zoom()
+      eq(view.zoomed_side, "new", "zoomed onto the new side")
+      eq(diff_mark_count(view.new_buf), 0, "survivor cleared while zoomed")
+
+      render.toggle_zoom()
+      H.assert.is_nil(view.zoomed_side, "unzoomed")
+      ok(diff_mark_count(view.new_buf) >= 1, "new buffer diff paint restored after unzoom")
+      ok(diff_mark_count(view.old_buf) >= 1, "old buffer diff paint restored after unzoom")
+
+      render.close()
+    end)
+    rmrf(repo)
+  end)
+
+  -- Covers: TST-RND-0018 (a file switch while zoomed re-clears the survivor).
+  it("next_file while zoomed re-clears the new file's survivor buffer", function()
+    local repo = make_two_modified()
+    in_dir(repo, function()
+      local info = diff.resolve_shas(diff.parse_range(nil))
+      local view = render.open(info, Store.new())
+      eq(render.current_path(), "x.txt", "opens on x.txt")
+
+      vim.api.nvim_set_current_win(view.new_win)
+      render.toggle_zoom()
+      eq(view.zoomed_side, "new", "zoomed onto the new side")
+      eq(diff_mark_count(view.new_buf), 0, "survivor cleared on x.txt")
+
+      render.next_file()
+      eq(render.current_path(), "y.txt", "advanced to y.txt")
+      eq(view.zoomed_side, "new", "zoom persists across the switch")
+      eq(diff_mark_count(view.new_buf), 0, "survivor re-cleared on y.txt after the switch")
+
+      render.close()
+    end)
+    rmrf(repo)
+  end)
+
+  -- Covers: TST-RND-0018 (a zoom-side swap on a pure-diff file clears the new
+  -- survivor buffer, not the one that was zoomed before the switch).
+  it("next_file into a pure-deletion file while zoomed clears the swapped survivor", function()
+    local base = vim.fn.resolve(vim.fn.tempname())
+    assert(vim.fn.mkdir(base, "p") == 1)
+    git(base, { "init", "-q" })
+    git(base, { "config", "user.email", "t@example.com" })
+    git(base, { "config", "user.name", "t" })
+    git(base, { "config", "commit.gpgsign", "false" })
+    write_file(base, "keep.txt", "k1\nk2\n")
+    write_file(base, "del.txt", "d1\nd2\n")
+    git(base, { "add", "-A" })
+    git(base, { "commit", "-q", "-m", "base" })
+    write_file(base, "keep.txt", "k1\nKNEW\nk2\n") -- modified: both-side content
+    assert(os.remove(base .. "/del.txt")) -- pure deletion: no new-side content
+
+    in_dir(base, function()
+      local info = diff.resolve_shas(diff.parse_range(nil))
+      local view = render.open(info, Store.new())
+
+      render.switch_file("keep.txt")
+      vim.api.nvim_set_current_win(view.new_win)
+      render.toggle_zoom()
+      eq(view.zoomed_side, "new", "zoomed onto keep.txt's new side")
+
+      render.next_file()
+      eq(render.current_path(), "del.txt", "advanced to the deleted file")
+      eq(view.zoomed_side, "old", "zoom swapped to the side with content")
+      -- The old buffer is the new survivor; it carries del.txt's delete-row paint
+      -- until the swap re-clears it.
+      eq(diff_mark_count(view.old_buf), 0, "swapped survivor has no diff paint")
 
       render.close()
     end)

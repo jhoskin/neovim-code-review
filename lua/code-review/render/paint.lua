@@ -373,4 +373,18 @@ function M.apply_comments(view, model, store, path)
   paint_comments(old_buf, new_buf, ns, model, store, path)
 end
 
+-- ── API: clear_diff ────────────────────────────────────────────────────────
+-- Strip the structural diff decorations (line backgrounds, gutter change signs,
+-- intra-line word spans — all in NS) from a single buffer. Leaves treesitter and
+-- the comment markers (NS_COMMENTS) untouched. While a diff side is zoomed the
+-- add/change backgrounds drown the treesitter highlighting, so the surviving
+-- buffer reads better as plain syntax; the caller clears it here (REQ-RND-0018).
+function M.clear_diff(buf)
+  if not (buf and vim.api.nvim_buf_is_valid(buf)) then
+    return
+  end
+  local ns = vim.api.nvim_create_namespace(M.NS)
+  vim.api.nvim_buf_clear_namespace(buf, ns, 0, -1)
+end
+
 return M

@@ -316,6 +316,14 @@ function M.prev_change()
   require("code-review.render.init").prev_change()
 end
 
+-- Toggle zooming the current diff side to full width (tmux-style).
+function M.toggle_zoom()
+  if not M._session then
+    return
+  end
+  require("code-review.render.init").toggle_zoom()
+end
+
 function M.add_comment()
   if not M._session then
     return
@@ -552,6 +560,7 @@ function M._set_keymaps(bufnr)
   set_map(bufnr, km.prev_file, M.prev_file, "Code review: previous file")
   set_map(bufnr, km.next_change, M.next_change, "Code review: next change")
   set_map(bufnr, km.prev_change, M.prev_change, "Code review: previous change")
+  set_map(bufnr, km.toggle_zoom, M.toggle_zoom, "Code review: zoom current side")
   set_map(bufnr, km.add_comment, M.add_comment, "Code review: add line comment")
   set_map(bufnr, km.delete_comment, M.delete_comment, "Code review: delete comment")
   set_map(bufnr, km.file_comment, M.add_file_comment, "Code review: add file comment")
@@ -568,6 +577,7 @@ function M._set_file_panel_keymaps(bufnr)
   local km = config.values.keymaps
   set_map(bufnr, km.next_file, M.next_file, "Code review: next file")
   set_map(bufnr, km.prev_file, M.prev_file, "Code review: previous file")
+  set_map(bufnr, km.toggle_zoom, M.toggle_zoom, "Code review: zoom current side")
   set_map(bufnr, km.file_comment, M.add_file_comment, "Code review: add file comment")
   set_map(bufnr, km.summary, M.submit, "Code review: submit (show summary)")
   set_map(bufnr, km.cancel, M.cancel, "Code review: cancel review")

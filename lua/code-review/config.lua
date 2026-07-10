@@ -11,6 +11,10 @@ M.defaults = {
     -- so it wins over any global ]c/[c (REQ-RND-0016, REQ-UIX-0012).
     next_change = "]c",
     prev_change = "[c",
+    -- Zoom the current diff side to full width (tmux-style). Hides the other
+    -- diff window and turns on wrap; press again to restore old|new
+    -- (REQ-RND-0017, REQ-UIX-0008).
+    toggle_zoom = "<leader>Rz",
     add_comment = "<leader>Rr",
     file_comment = "<leader>RR",
     delete_comment = "<leader>Rd",

@@ -68,6 +68,7 @@ During a review session, on diff buffers and the file panel:
 | `<leader>Rr` | Add/edit line comment                        |
 | `<leader>RR` | Add/edit file comment                        |
 | `<leader>Rd` | Delete comment at cursor                     |
+| `<leader>Rz` | Zoom current diff side to full width (drops diff paint for syntax) |
 | `<leader>Rs` | Show summary and submit                      |
 | `<leader>Rp` | Pause session (save for later)               |
 | `<leader>Rq` | Cancel review (discard)                      |

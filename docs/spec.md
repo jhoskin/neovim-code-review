@@ -332,6 +332,7 @@ Default mappings (user configurable; see REQ-UIX-0008):
 | `<leader>RN` | diff/panel    | Previous changed file                   |
 | `]c`         | diff panel    | Jump to next change (hunk)              |
 | `[c`         | diff panel    | Jump to previous change (hunk)          |
+| `<leader>Rz` | diff/panel    | Zoom current diff side to full width    |
 | `<leader>Rr` | diff panel    | Add line comment at cursor              |
 | `<leader>RR` | file panel    | Add file-level comment for the file shown in the diff (resolved via `render.current_path()`) |
 | `<leader>Rd` | diff panel    | Delete comment at cursor                |
@@ -447,6 +448,7 @@ require("code-review").setup({
     prev_file = "<leader>RN",
     next_change = "]c",
     prev_change = "[c",
+    toggle_zoom = "<leader>Rz",
     add_comment = "<leader>Rr",
     file_comment = "<leader>RR",
     delete_comment = "<leader>Rd",
@@ -894,11 +896,16 @@ to proceed, create no review file, and exit with code 2 (see section 4.9).
 `<leader>R` prefix (Review) to avoid collision with common LazyVim/which-key
 `<leader>c*` (code) bindings. Defaults: `<leader>Rn` (next file),
 `<leader>RN` (previous file), `<leader>Rr` (add line comment),
-`<leader>RR` (file comment), `<leader>Rd` (delete comment), `<leader>Rs`
-(submit / show summary), `<leader>Rq` (cancel), `<leader>Rp` (pause), and
-`<C-s>` (confirm comment in float). Motion keys are the exception: change
-navigation uses the bracket convention `]c`/`[c` (REQ-UIX-0012). All keybindings
-are configurable via `setup({ keymaps = { ... } })` (see REQ-UIX-0005).
+`<leader>RR` (file comment), `<leader>Rd` (delete comment), `<leader>Rz`
+(zoom current side), `<leader>Rs` (submit / show summary), `<leader>Rq`
+(cancel), `<leader>Rp` (pause), and `<C-s>` (confirm comment in float).
+Motion keys are the exception: change
+navigation uses the bracket convention `]c`/`[c` (REQ-UIX-0012). Additionally,
+`<leader>Rz` toggles zooming the current diff side (REQ-RND-0017); while zoomed
+the surviving buffer drops its diff decorations so syntax highlighting shows,
+and unzoom restores them (REQ-RND-0018). All
+keybindings are configurable via `setup({ keymaps = { ... } })` (see
+REQ-UIX-0005).
 
 **REQ-UIX-0010** (Optional-feature): Where a value in the `keymaps`
 table passed to `setup()` is `false`, the system shall skip registering
@@ -1094,6 +1101,24 @@ maximal run of non-context rows in the diff model — wrapping within the file
 (past the last hunk to the first, before the first to the last), honoring a
 numeric `[count]`, and keeping both diff windows aligned.
 
+**REQ-RND-0017** (Event-driven): When the user invokes the zoom toggle, the
+system shall hide the other diff window so the current side takes the full width
+while the file panel stays in place, set `wrap` on and `scrollbind`/`cursorbind`
+off for the surviving window, and on a second toggle restore the old|new layout
+with the original window options, the cursor on the same row, and the two sides
+re-synced. Zoom shall persist across file and hunk navigation, swapping to the
+other side when the zoomed side has no content in the newly shown file. Invoked
+from the file panel, the toggle shall act on the primary side (the new side; the
+old side for a pure-deletion file) without moving focus.
+
+**REQ-RND-0018** (Event-driven): While zoomed, the system shall render the
+surviving diff buffer without diff decorations — line backgrounds, intra-line
+word highlights, and change signs — so treesitter syntax highlighting is
+unobstructed; comment markers shall remain. Unzoom shall restore the full diff
+paint. The plain rendering shall persist across file and hunk navigation while
+zoomed, including when the zoomed side swaps to the other side for a pure
+add/delete file.
+
 ## 7. Verification Matrix
 
 | Requirement   | Test ID       | Method   | Description |
@@ -1172,6 +1197,8 @@ numeric `[count]`, and keeping both diff windows aligned.
 | REQ-RND-0014  | TST-RND-0014  | Auto     | Set config.values.panel_width and open a review; verify the panel window width equals the configured value |
 | REQ-RND-0015  | TST-RND-0015  | Auto     | Open a review; verify the panel window has no number/fold column and signcolumn auto, and each diff window has number on, relativenumber off, foldcolumn 0, signcolumn auto, and a tight numberwidth |
 | REQ-RND-0016  | TST-RND-0016  | Auto     | On a file with multiple hunks, from a known cursor row invoke next-change/previous-change; verify the cursor lands on the expected hunk-start row, wraps within the file, honors a count, and leaves both diff windows on the same row |
+| REQ-RND-0017  | TST-RND-0017  | Auto     | Invoke the zoom toggle in a diff window; verify the other diff window is hidden, the panel stays, the surviving window has wrap on and scrollbind/cursorbind off; toggle again and verify the two-window layout, window options, cursor row, and scroll sync are restored; navigate files to verify zoom persists and swaps sides when the zoomed side is empty; from the panel verify it zooms the primary side without moving focus |
+| REQ-RND-0018  | TST-RND-0018  | Auto     | Zoom a file that has diff paint; verify the surviving buffer's diff namespace has no extmarks while comment markers stay; navigate to the next file while zoomed and verify it too has no diff decorations; unzoom and verify the diff paint returns |
 | REQ-LSP-0002  | TST-LSP-0002  | Auto     | Open the comment float and summary float, verify both have filetype `codereview` (covered by `test_12_float_filetype.sh`) |
 | REQ-LSP-0003  | TST-LSP-0003  | Auto     | Open the comment float, verify no LSPs are attached after the filetype is set |
 | REQ-RND-0005  | TST-LSP-0001  | Auto     | Start a review whose diff includes a `.md` file; assert no LSP client is attached to either diff buffer (consequence of `buftype=nofile`) |

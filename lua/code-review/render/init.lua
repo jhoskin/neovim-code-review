@@ -74,6 +74,20 @@ local function render_panel()
   end
 end
 
+-- While a diff side is zoomed the surviving buffer must read as plain syntax:
+-- the add/change backgrounds drown the treesitter highlighting when the reader
+-- zooms in to study a file. Strip the diff paint from the survivor; treesitter
+-- and the comment markers (a separate namespace) stay. No-op unless zoomed, and
+-- idempotent, so callers can fire it after any repaint or zoom-side swap
+-- (REQ-RND-0018).
+local function apply_zoom_paint()
+  local v = state.view
+  if not (v and v.zoomed_side) then
+    return
+  end
+  paint.clear_diff(v[v.zoomed_side .. "_buf"])
+end
+
 -- Render one file into the view: compute/replay the model, point the view at the
 -- path (rename buffers, reset cursor), set the language for treesitter, then
 -- paint. paint.apply is the single buffer fill. Returns the model.
@@ -83,36 +97,58 @@ local function render_path(path)
   state.view:set_path(path)
   paint.apply(state.view, model, state.store)
   state.current_path = path
+  -- A file switch while zoomed repaints both buffers, so re-clear the survivor.
+  apply_zoom_paint()
   return model
 end
 
--- Move focus into the new-side diff window so a line comment / edit lands on the
--- version the reviewer cares about. Edge case: a pure-deletion file has no new
--- content (the new side is all filler, nothing to comment on), so focus the old
--- side instead. Cursor goes to the top (set_path already reset it).
+-- True when any model row carries a line number on `side` ("old"/"new"). A pure
+-- addition has no old-side content; a pure deletion has no new-side content.
+-- Generalizes the old has_new loop; exposed for tests (REQ-RND-0017).
+local function side_has_content(model, side)
+  local field = side .. "_lineno"
+  for _, row in ipairs(model.rows) do
+    if row[field] ~= nil then
+      return true
+    end
+  end
+  return false
+end
+M._side_has_content = side_has_content -- exposed for tests
+
+-- Move focus into the diff window a line comment / edit should land in: the new
+-- side by default, or the old side for a pure-deletion file (new side is all
+-- filler, nothing to comment on). While zoomed the surviving side keeps focus,
+-- swapping only when the newly shown file has no content there (REQ-RND-0017).
+-- Cursor goes to the top (set_path already reset it).
 local function focus_new_win()
   local v = state.view
   if not v then
     return
   end
-  local target = v.new_win
-  if state.current_path then
-    local model = model_for(state.current_path)
-    local has_new = false
-    for _, row in ipairs(model.rows) do
-      if row.new_lineno ~= nil then
-        has_new = true
-        break
-      end
+  local model = state.current_path and model_for(state.current_path) or nil
+  -- primary side: "new", or "old" when the file has no new-side content.
+  local primary = (model and not side_has_content(model, "new")) and "old" or "new"
+  local target
+  if v.zoomed_side then
+    -- Zoom persists across file switches on the same side; swap only when the
+    -- zoomed side has no content in the newly shown file (pure add/delete).
+    local side = v.zoomed_side
+    if model and not side_has_content(model, side) then
+      side = (side == "old") and "new" or "old"
     end
-    if not has_new and v.old_win then
-      target = v.old_win
-    end
+    v:set_zoom_side(side)
+    target = v[side .. "_win"]
+  else
+    target = v[primary .. "_win"]
   end
   if target and vim.api.nvim_win_is_valid(target) then
     vim.api.nvim_set_current_win(target)
     pcall(vim.api.nvim_win_set_cursor, target, { 1, 0 })
   end
+  -- A pure add/delete file may have swapped the zoomed side above; the newly
+  -- zoomed buffer is a fresh survivor that must be cleared too (REQ-RND-0018).
+  apply_zoom_paint()
 end
 
 -- 1-based index of `path` in the changed-files list, or nil.
@@ -303,7 +339,9 @@ local function nav_window()
     return nil, nil
   end
   local cur = v:current()
-  local win = (cur and cur.win) or v.new_win
+  -- Fall back to whichever diff window survives: new by default, old when
+  -- zoomed into the old side (new_win is nil then), so ]c/[c work from the panel.
+  local win = (cur and cur.win) or v.new_win or v.old_win
   if not (win and vim.api.nvim_win_is_valid(win)) then
     return nil, nil
   end
@@ -327,8 +365,17 @@ local function goto_change(dir, count)
   if not target then
     return
   end
-  for _, w in ipairs({ state.view.old_win, state.view.new_win }) do
-    if w and vim.api.nvim_win_is_valid(w) then
+  -- Build the list without a nil hole: while zoomed one side's win field is nil,
+  -- and ipairs stops at the first nil, which would skip the survivor (REQ-RND-0017).
+  local wins = {}
+  if state.view.old_win then
+    wins[#wins + 1] = state.view.old_win
+  end
+  if state.view.new_win then
+    wins[#wins + 1] = state.view.new_win
+  end
+  for _, w in ipairs(wins) do
+    if vim.api.nvim_win_is_valid(w) then
       pcall(vim.api.nvim_win_set_cursor, w, { target, 0 })
     end
   end
@@ -340,6 +387,51 @@ end
 
 function M.prev_change(count)
   goto_change("prev", count)
+end
+
+-- Toggle a tmux-style zoom of the current diff side: hide the other diff window
+-- so the survivor spans the full width, or restore both. From the panel there is
+-- no current side, so zoom the primary one (new, or old for a pure deletion).
+-- Unzoom leaves focus where it is (REQ-RND-0017).
+function M.toggle_zoom()
+  local v = state.view
+  if not v then
+    return
+  end
+  if v.zoomed_side then
+    v:unzoom()
+    -- Zoom stripped the survivor's diff paint (REQ-RND-0018); restore the full
+    -- diff paint on both buffers now. paint.apply refills the buffers, so save
+    -- and restore the diff windows' cursors around it to leave the view put.
+    if state.current_path then
+      local model = model_for(state.current_path)
+      local saved = {}
+      for _, side in ipairs({ "old", "new" }) do
+        local win = v[side .. "_win"]
+        if win and vim.api.nvim_win_is_valid(win) then
+          saved[win] = vim.api.nvim_win_get_cursor(win)
+        end
+      end
+      paint.apply(v, model, state.store)
+      for win, pos in pairs(saved) do
+        if vim.api.nvim_win_is_valid(win) then
+          pcall(vim.api.nvim_win_set_cursor, win, pos)
+        end
+      end
+    end
+    return
+  end
+  local cur = v:current()
+  local side
+  if cur then
+    side = cur.side
+  else
+    local model = state.current_path and model_for(state.current_path) or nil
+    side = (model and not side_has_content(model, "new")) and "old" or "new"
+  end
+  v:zoom(side)
+  -- Clear the freshly zoomed survivor so treesitter reads plainly (REQ-RND-0018).
+  apply_zoom_paint()
 end
 
 -- Repaint just the comment markers for the current file from the store, plus the
@@ -360,9 +452,23 @@ function M.review_windows()
   if not state.view then
     return {}
   end
+  -- Collect candidates without a nil hole: while zoomed one diff side's win
+  -- field is nil, and ipairs over a literal stops at the first nil, which would
+  -- drop later windows (returning {} zoomed on new, or losing the panel zoomed
+  -- on old). Append the non-nil fields first, then validity-filter. (REQ-RND-0017)
+  local candidates = {}
+  if state.view.old_win then
+    candidates[#candidates + 1] = state.view.old_win
+  end
+  if state.view.new_win then
+    candidates[#candidates + 1] = state.view.new_win
+  end
+  if state.view.panel_win then
+    candidates[#candidates + 1] = state.view.panel_win
+  end
   local wins = {}
-  for _, w in ipairs({ state.view.old_win, state.view.new_win, state.view.panel_win }) do
-    if w and vim.api.nvim_win_is_valid(w) then
+  for _, w in ipairs(candidates) do
+    if vim.api.nvim_win_is_valid(w) then
       wins[#wins + 1] = w
     end
   end
