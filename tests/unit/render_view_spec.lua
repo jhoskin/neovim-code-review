@@ -224,6 +224,206 @@ describe("render/view layout", function()
   end)
 end)
 
+-- Covers: TST-RND-0017 (tmux-style zoom of one diff side + restore).
+describe("render/view zoom", function()
+  it("zoom('new') hides old and reconfigures the survivor (TST-RND-0017)", function()
+    local v = open_view("a.lua")
+    local old_win, old_buf, pw = v.old_win, v.old_buf, v.panel_win
+    ok(v:zoom("new"), "zoom returns true")
+    eq(v.zoomed_side, "new")
+    eq(vim.api.nvim_win_is_valid(old_win), false, "old window hidden/closed")
+    H.assert.is_nil(v.old_win, "old_win field nil while zoomed")
+    H.assert.is_nil(v.registry[old_win], "no registry entry for the hidden old window")
+    eq(vim.wo[v.new_win].wrap, true, "survivor wraps while zoomed")
+    eq(vim.wo[v.new_win].scrollbind, false, "survivor scrollbind off")
+    eq(vim.wo[v.new_win].cursorbind, false, "survivor cursorbind off")
+    ok(vim.api.nvim_buf_is_valid(old_buf), "old buffer survives (not wiped)")
+    eq(vim.bo[old_buf].bufhidden, "hide", "hidden buffer flipped to bufhidden=hide")
+    ok(vim.api.nvim_win_is_valid(pw), "panel window untouched")
+    v:close()
+  end)
+
+  it("unzoom restores old|new with binds and synced cursor (TST-RND-0017)", function()
+    local v = open_view("a.lua")
+    vim.api.nvim_set_current_win(v.new_win)
+    vim.api.nvim_win_set_cursor(v.new_win, { 2, 0 })
+    v:zoom("new")
+    v:unzoom()
+    H.assert.is_nil(v.zoomed_side, "no longer zoomed")
+    ok(vim.api.nvim_win_is_valid(v.old_win), "old window restored")
+    ok(vim.api.nvim_win_is_valid(v.new_win), "new window still valid")
+    ok(vim.api.nvim_win_is_valid(v.panel_win), "panel window still valid")
+    -- old sits to the LEFT of new (compare start columns).
+    local old_col = vim.api.nvim_win_get_position(v.old_win)[2]
+    local new_col = vim.api.nvim_win_get_position(v.new_win)[2]
+    ok(old_col < new_col, "old is left of new (" .. old_col .. " < " .. new_col .. ")")
+    for _, win in ipairs({ v.old_win, v.new_win }) do
+      eq(vim.wo[win].wrap, false, "wrap off after restore")
+      eq(vim.wo[win].scrollbind, true, "scrollbind back on")
+      eq(vim.wo[win].cursorbind, true, "cursorbind back on")
+      eq(vim.wo[win].winfixbuf, true, "winfixbuf back on")
+    end
+    eq(vim.bo[v.old_buf].bufhidden, "wipe", "hidden buffer bufhidden back to wipe")
+    eq(v.registry[v.old_win], { side = "old", path = v.path }, "restored registry entry")
+    eq(vim.api.nvim_win_get_cursor(v.old_win)[1], 2, "restored window cursor row matches survivor")
+    v:close()
+  end)
+
+  it("zoom is idempotent per side (TST-RND-0017)", function()
+    local v = open_view("a.lua")
+    ok(v:zoom("new"), "first zoom returns true")
+    ok(v:zoom("new"), "second zoom on the same side returns true")
+    eq(v.zoomed_side, "new")
+    ok(vim.api.nvim_win_is_valid(v.new_win), "survivor still valid")
+    v:close()
+  end)
+
+  it("zoom('old') after zoom('new') swaps sides (TST-RND-0017)", function()
+    local v = open_view("a.lua")
+    v:zoom("new")
+    ok(v:zoom("old"), "swap zoom returns true")
+    eq(v.zoomed_side, "old")
+    ok(vim.api.nvim_win_is_valid(v.old_win), "old is now the survivor")
+    H.assert.is_nil(v.new_win, "new is now hidden")
+    ok(vim.api.nvim_buf_is_valid(v.old_buf), "old buffer valid")
+    ok(vim.api.nvim_buf_is_valid(v.new_buf), "new buffer valid")
+    v:close()
+  end)
+
+  it("set_zoom_side swaps only when zoomed on the other side (TST-RND-0017)", function()
+    local v = open_view("a.lua")
+    -- Not zoomed: no-op.
+    v:set_zoom_side("old")
+    H.assert.is_nil(v.zoomed_side, "set_zoom_side is a no-op when not zoomed")
+    v:zoom("new")
+    -- Same side: no-op.
+    v:set_zoom_side("new")
+    eq(v.zoomed_side, "new", "same-side set_zoom_side is a no-op")
+    -- Other side: unzoom + zoom.
+    v:set_zoom_side("old")
+    eq(v.zoomed_side, "old", "set_zoom_side switched to old")
+    H.assert.is_nil(v.new_win, "new hidden after switch")
+    v:close()
+  end)
+
+  it("show_file while zoomed does not error; restored path is current (TST-RND-0017)", function()
+    local v = open_view("a.lua")
+    v:zoom("new")
+    local okcall = pcall(function()
+      v:show_file("b.lua")
+    end)
+    ok(okcall, "show_file while zoomed did not error")
+    eq(v.registry[v.new_win].path, "b.lua", "survivor registry tracks the current file")
+    v:unzoom()
+    eq(v.registry[v.old_win].path, "b.lua", "restored window registry path is the current file")
+    v:close()
+  end)
+
+  it("current() resolves the survivor while zoomed (TST-RND-0017)", function()
+    local v = open_view("a.lua")
+    v:zoom("new")
+    vim.api.nvim_set_current_win(v.new_win)
+    local cur = v:current()
+    eq(cur.side, "new", "current side is the survivor")
+    eq(cur.buf, v.new_buf, "current buf is the survivor buffer")
+    v:close()
+  end)
+
+  it("close while zoomed deletes the hidden buffer too (TST-RND-0017)", function()
+    local v = open_view("a.lua")
+    local old_buf = v.old_buf
+    v:zoom("new")
+    ok(vim.api.nvim_buf_is_valid(old_buf), "hidden buffer alive while zoomed")
+    v:close()
+    eq(vim.api.nvim_buf_is_valid(old_buf), false, "hidden buffer deleted on close (no leak)")
+  end)
+
+  it("unzoom after the survivor is :q'd anchors on the panel (TST-RND-0017)", function()
+    local v = open_view("a.lua")
+    v:zoom("new")
+    -- :q the survivor window out from under the view.
+    vim.api.nvim_win_close(v.new_win, true)
+    local okcall = pcall(function()
+      v:unzoom()
+    end)
+    ok(okcall, "unzoom did not error after the survivor was closed")
+    ok(vim.api.nvim_win_is_valid(v.old_win), "hidden side restored, anchored on the panel")
+    H.assert.is_nil(v.zoomed_side, "no longer zoomed")
+    v:close()
+  end)
+
+  -- Property-style invariant sweep: random zoom/unzoom/show_file ops, seeded.
+  it("zoom invariants hold over 100 random ops (property, TST-RND-0017)", function()
+    local v = open_view("a.lua")
+    math.randomseed(42)
+    local ops = {
+      function()
+        v:zoom("old")
+      end,
+      function()
+        v:zoom("new")
+      end,
+      function()
+        v:unzoom()
+      end,
+      function()
+        v:show_file("a.lua")
+      end,
+      function()
+        v:show_file("b.lua")
+      end,
+    }
+    for i = 1, 100 do
+      ops[math.random(#ops)]()
+
+      -- Valid diff-window count matches the zoom state.
+      local wins = {}
+      if v.old_win then
+        wins[v.old_win] = true
+      end
+      if v.new_win then
+        wins[v.new_win] = true
+      end
+      local nwin = 0
+      for win in pairs(wins) do
+        ok(vim.api.nvim_win_is_valid(win), "tracked diff win valid @ op " .. i)
+        nwin = nwin + 1
+      end
+      eq(nwin, v.zoomed_side and 1 or 2, "diff window count matches zoom state @ op " .. i)
+
+      -- Registry keys are exactly the currently tracked diff windows.
+      local nreg = 0
+      for win in pairs(v.registry) do
+        ok(wins[win], "registry key is a tracked diff win @ op " .. i)
+        nreg = nreg + 1
+      end
+      eq(nreg, nwin, "registry key count matches diff window count @ op " .. i)
+
+      -- Survivor wraps iff zoomed; both diff buffers stay valid.
+      if v.zoomed_side then
+        local surv = v[v.zoomed_side .. "_win"]
+        eq(vim.wo[surv].wrap, true, "survivor wraps while zoomed @ op " .. i)
+      else
+        eq(vim.wo[v.old_win].wrap, false, "old wrap off when unzoomed @ op " .. i)
+        eq(vim.wo[v.new_win].wrap, false, "new wrap off when unzoomed @ op " .. i)
+      end
+      ok(vim.api.nvim_buf_is_valid(v.old_buf), "old buffer valid @ op " .. i)
+      ok(vim.api.nvim_buf_is_valid(v.new_buf), "new buffer valid @ op " .. i)
+
+      -- bufhidden is "hide" exactly for the hidden side while zoomed, else "wipe".
+      if v.zoomed_side then
+        local hidden = v.zoomed_side == "old" and "new" or "old"
+        eq(vim.bo[v[hidden .. "_buf"]].bufhidden, "hide", "hidden buf is bufhidden=hide @ op " .. i)
+        eq(vim.bo[v[v.zoomed_side .. "_buf"]].bufhidden, "wipe", "survivor buf is bufhidden=wipe @ op " .. i)
+      else
+        eq(vim.bo[v.old_buf].bufhidden, "wipe", "old buf wipe when unzoomed @ op " .. i)
+        eq(vim.bo[v.new_buf].bufhidden, "wipe", "new buf wipe when unzoomed @ op " .. i)
+      end
+    end
+    v:close()
+  end)
+end)
+
 describe("render/panel", function()
   -- A fake store: per-path comment counts via count_for(self, path).
   local function fake_store(counts)

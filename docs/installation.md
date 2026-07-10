@@ -56,6 +56,12 @@ fill. Both diff windows set `winfixbuf=true`, which structurally blocks
 swapping another buffer into a diff window, plus `scrollbind` and
 `cursorbind` so the two sides stay aligned.
 
+The zoom toggle (`<leader>Rz`) hides the other diff window so the
+current side takes the full width and turns on `wrap` for its long
+lines; pressing it again restores the old|new layout. While zoomed the
+surviving buffer drops the red/green diff paint so syntax highlighting
+shows through; unzoom restores it.
+
 Because the diff buffers are `nofile`, no LSP attaches to them. Nothing
 files diagnostics against the transient git blobs, and there is no
 cleanup to do.
@@ -218,6 +224,7 @@ require("code-review").setup({
   keymaps = {
     next_file       = "<leader>Rn",  -- next changed file (focus new side)
     prev_file       = "<leader>RN",  -- previous changed file
+    toggle_zoom     = "<leader>Rz",  -- zoom current diff side to full width
     add_comment     = "<leader>Rr",  -- line comment at cursor
     file_comment    = "<leader>RR",  -- file-level comment
     delete_comment  = "<leader>Rd",  -- delete comment at cursor
@@ -297,6 +304,7 @@ so which-key shows them under the `<leader>R` group as soon as you hit
 |--------------|-----------------------------------------|:------------:|:----------:|
 | `<leader>Rn` | Next file (focus the new-side window)   | yes          | yes        |
 | `<leader>RN` | Previous file                           | yes          | yes        |
+| `<leader>Rz` | Zoom current diff side to full width    | yes          | yes        |
 | `<leader>Rr` | Add/edit line comment at cursor         | yes          | no         |
 | `<leader>Rd` | Delete comment at cursor                | yes          | no         |
 | `<leader>RR` | Add/edit file-level comment             | yes          | yes        |

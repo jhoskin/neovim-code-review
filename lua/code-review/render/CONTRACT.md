@@ -70,6 +70,10 @@ view:set_path(path)         -- rename buffers + registry + reset cursor (no fill
 view:show_file(path)        -- set_path + fill from the content provider
 view:close()
 view:current() -> { path, side = "old"|"new", win, buf }
+view:zoom(side)             -- keep `side`, hide the other; true on success, false if a window is gone
+view:unzoom()               -- restore both diff windows; no-op if not zoomed
+view:set_zoom_side(side)    -- switch the kept side; no-op unless zoomed on the other side
+view.zoomed_side            -- "old" | "new" | nil (nil when both windows show)
 ```
 
 The orchestrator fills the diff buffers exactly once, via `paint.apply`,
@@ -89,6 +93,35 @@ Buffer contract (REQ-RND-0005, spike-verified):
 Window registry: view maps each window id -> { side, path } so side
 detection is "current win vs registry" (no diffview API).
 
+Zoom (REQ-RND-0017): `zoom(side)` hides the other diff window so `side`
+takes the full diff width, tmux-style; `unzoom()` restores `old | new`.
+Invariants while zoomed:
+
+- The hidden side's `*_win` field is nil and its registry entry is removed,
+  so the valid diff windows equal the registry keys at all times.
+- The hidden buffer's `bufhidden` is temporarily `hide` (the diff buffers
+  are `wipe`, so hiding their only window would wipe them); `unzoom`
+  restores `wipe`.
+- The survivor drops `scrollbind`/`cursorbind` and turns `wrap` on, since
+  it has no sibling to bind to.
+- `unzoom` re-applies the full `lock_diff_win` option set (`winfixbuf`,
+  binds, `wrap=false`, gutter) to both windows and copies the survivor's
+  cursor row into the restored window. The restored window is opened with
+  its buffer already in it, so `winfixbuf` holds. If the survivor was
+  closed (`:q`), the restored window anchors on the panel instead.
+
+Plain syntax while zoomed (REQ-RND-0018): the orchestrator strips diff
+paint from the survivor so treesitter shows through. `init.lua` calls
+`paint.clear_diff(buf)` after zoom, after each paint while zoomed, and
+after a side swap. Orchestration-level invariants:
+
+- While zoomed the survivor buffer's diff namespace (`code_review_render`)
+  holds no extmarks; the comments namespace (`code_review_comments`) is
+  untouched, so comment markers stay.
+- The clearing persists across file and hunk navigation while zoomed,
+  including a side swap for a pure add/delete file.
+- `unzoom` repaints, so full diff paint returns on both sides.
+
 ## Paint (`render/paint.lua`)
 
 Pure helpers + extmark application in two namespaces: diff paint in
@@ -105,6 +138,9 @@ Pure helpers + extmark application in two namespaces: diff paint in
 - `apply_comments(view, model, store[, path])` — clears and repaints
   only the comment markers (NS_COMMENTS); no buffer fill, no treesitter
   restart, no diff repaint. The cheap path for a comment add/delete.
+- `clear_diff(buf)` — clears the diff namespace (NS) on `buf`, leaving
+  comment markers (NS_COMMENTS) and treesitter intact. The orchestrator
+  calls it to strip diff paint from the zoomed survivor (REQ-RND-0018).
 - Highlight groups reuse the existing `CodeReview*` groups in
   `config.lua`; add `CodeReviewAdd/Change/Delete` + their sign groups.
 

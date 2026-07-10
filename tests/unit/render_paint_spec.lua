@@ -325,4 +325,48 @@ describe("render/paint apply", function()
     eq(comment_rows(old_buf), { 1 }, "old-side comment lands on old buffer at the delete row")
     eq(comment_rows(new_buf), {}, "old-side comment must NOT appear on the new buffer")
   end)
+
+  -- REQ-RND-0018: while a diff side is zoomed the survivor shows plain syntax,
+  -- not the diff paint. clear_diff strips every extmark in the diff namespace
+  -- (line backgrounds, gutter signs, intra spans) from the buffer while leaving
+  -- the comments namespace (comment markers/signs) intact.
+  -- Covers: TST-RND-0018.
+  it("clear_diff removes all diff-namespace extmarks but leaves comments intact", function()
+    local old_buf = vim.api.nvim_create_buf(false, true)
+    local new_buf = vim.api.nvim_create_buf(false, true)
+
+    -- A change row paints the new side (line bg + sign + intra); a new-side line
+    -- comment lands a marker in NS_COMMENTS on the same buffer.
+    local m = diff.compute({ "local x = 1", "return x" }, { "local x = 2", "return x" })
+    local view = { old_buf = old_buf, new_buf = new_buf, lang = "lua", path = "foo.lua" }
+    local store = {
+      get_all = function()
+        return {
+          {
+            path = "foo.lua",
+            comment = nil,
+            lines = {
+              { side = "new", old_lineno = 1, new_lineno = 1, body = "why?" },
+            },
+          },
+        }
+      end,
+    }
+
+    paint.apply(view, m, store)
+
+    local ns = vim.api.nvim_create_namespace(paint.NS)
+    local ns_comments = vim.api.nvim_create_namespace(paint.NS_COMMENTS)
+
+    ok(#vim.api.nvim_buf_get_extmarks(new_buf, ns, 0, -1, {}) >= 1, "diff paint present before clear")
+    ok(#vim.api.nvim_buf_get_extmarks(new_buf, ns_comments, 0, -1, {}) >= 1,
+      "comment marker present before clear")
+
+    paint.clear_diff(new_buf)
+
+    eq(#vim.api.nvim_buf_get_extmarks(new_buf, ns, 0, -1, {}), 0,
+      "clear_diff removed every diff-namespace extmark")
+    ok(#vim.api.nvim_buf_get_extmarks(new_buf, ns_comments, 0, -1, {}) >= 1,
+      "clear_diff left the comment marker intact")
+  end)
 end)

@@ -39,6 +39,15 @@ local function make_diff_buf(side, path)
   return buf
 end
 
+-- The opposite side. Zoom keeps one side and hides the other (REQ-RND-0017).
+local function other(side)
+  return side == "old" and "new" or "old"
+end
+
+local function win_valid(win)
+  return win ~= nil and vim.api.nvim_win_is_valid(win)
+end
+
 -- Lock a diff window: pin its buffer and bind scroll/cursor to its sibling.
 local function lock_diff_win(win)
   vim.wo[win].winfixbuf = true
@@ -60,6 +69,7 @@ function View.new()
   self.registry = {} -- win id -> { side, path }
   self.path = nil
   self.content_provider = nil
+  self.zoomed_side = nil -- "old" | "new" | nil; the side kept full-width
   return self
 end
 
@@ -210,6 +220,78 @@ function View:show_file(path)
 
   set_buf_lines(self.old_buf, old_lines)
   set_buf_lines(self.new_buf, new_lines)
+end
+
+-- Zoom the layout to a single diff side (REQ-RND-0017): hide the OTHER side so
+-- `side` takes the full diff width, tmux-style. `side` is the side to KEEP.
+-- Returns true on success, false if either window is gone.
+function View:zoom(side)
+  if self.zoomed_side == side then
+    return true
+  end
+  if self.zoomed_side then
+    self:unzoom()
+  end
+  local hide_side = other(side)
+  local hide_win, hide_buf = self[hide_side .. "_win"], self[hide_side .. "_buf"]
+  local keep_win = self[side .. "_win"]
+  if not (win_valid(hide_win) and win_valid(keep_win)) then
+    return false
+  end
+  -- The diff buffers are bufhidden="wipe", so hiding their only window would
+  -- WIPE the buffer. Flip to "hide" first; unzoom restores "wipe".
+  vim.bo[hide_buf].bufhidden = "hide"
+  self.registry[hide_win] = nil
+  pcall(vim.api.nvim_win_hide, hide_win)
+  self[hide_side .. "_win"] = nil -- invariant: the hidden side's win field is nil
+  -- Alone on screen, the survivor has no sibling to bind to; let long lines wrap.
+  vim.wo[keep_win].scrollbind = false
+  vim.wo[keep_win].cursorbind = false
+  vim.wo[keep_win].wrap = true
+  self.zoomed_side = side
+  return true
+end
+
+-- Restore both diff windows after a zoom. No-op if not zoomed.
+function View:unzoom()
+  if not self.zoomed_side then
+    return
+  end
+  local hidden_side = other(self.zoomed_side)
+  local surv_win = self[self.zoomed_side .. "_win"]
+  local hid_buf = self[hidden_side .. "_buf"]
+  -- The survivor may have been :q'd; fall back to anchoring on the panel.
+  local anchor = win_valid(surv_win) and surv_win or self.panel_win
+  local split = (anchor == surv_win) and (hidden_side == "old" and "left" or "right") or "right"
+  -- Open with the buffer already in the window: winfixbuf must be set with the
+  -- intended buffer present, so never split-then-set-buf.
+  local win = vim.api.nvim_open_win(hid_buf, false, { win = anchor, split = split })
+  vim.bo[hid_buf].bufhidden = "wipe"
+  if win_valid(surv_win) then
+    pcall(vim.api.nvim_win_set_cursor, win, { vim.api.nvim_win_get_cursor(surv_win)[1], 0 })
+    lock_diff_win(surv_win) -- wrap=false, binds back on
+  end
+  lock_diff_win(win)
+  self[hidden_side .. "_win"] = win
+  self.registry[win] = { side = hidden_side, path = self.path }
+  self.zoomed_side = nil
+  if win_valid(surv_win) then
+    vim.api.nvim_win_call(surv_win, function()
+      vim.cmd("syncbind")
+    end)
+    -- Re-spread the diff widths; the panel keeps its slim width via winfixwidth.
+    vim.api.nvim_win_call(surv_win, function()
+      vim.cmd("wincmd =")
+    end)
+  end
+end
+
+-- Switch which side is zoomed. No-op unless zoomed on the OTHER side.
+function View:set_zoom_side(side)
+  if self.zoomed_side and self.zoomed_side ~= side then
+    self:unzoom()
+    self:zoom(side)
+  end
 end
 
 -- Resolve the current cursor position to { path, side, win, buf } using the
