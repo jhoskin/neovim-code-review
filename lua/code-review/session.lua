@@ -100,7 +100,7 @@ function M.list()
     end
     if type == "file" and name:match("%.json$") then
       local session_id = name:gsub("%.json$", "")
-      local session_data, err = M.load(session_id)
+      local session_data = M.load(session_id)
       if session_data then
         table.insert(sessions, {
           session_id = session_data.session_id,
