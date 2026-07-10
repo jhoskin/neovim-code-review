@@ -1,36 +1,46 @@
 #!/usr/bin/env bash
-# Test 38: failure handling. If the durable review session is killed without a
-# submit (a crash or forced close, NOT a tab close -- a tab close only detaches),
-# `wait` detects the aborted review and returns promptly (exit 2) instead of
-# hanging until its timeout. osascript is stubbed so no real Ghostty window opens.
-set -uo pipefail
+# Test 38: failure handling on the zmx contract. If the durable review session
+# is killed without a submit (a crash or forced kill, NOT a tab close -- a tab
+# close only detaches the client), `wait` detects the aborted review and returns
+# promptly (exit 2) instead of hanging until its timeout.
+# CR_KITTEN_BIN=/usr/bin/true so no real kitty tab opens during the test.
+set -euo pipefail
 source "$(dirname "$0")/lib.sh"
 
 LAUNCH="$PLUGIN_ROOT/scripts/interactive-review-launch"
 
-stub=$(mktemp -d -t cr-osa-stub.XXXXXX)
-printf '#!/usr/bin/env bash\nexit 0\n' > "$stub/osascript"
-chmod +x "$stub/osascript"
-export PATH="$stub:$PATH"
+# Resolve the zmx binary exactly as the launcher does; fail fast if absent.
+ZMX="${CR_ZMX_BIN:-/opt/homebrew/bin/zmx}"
+if [ ! -x "$ZMX" ]; then
+  echo "FAIL: zmx binary not found at $ZMX (set CR_ZMX_BIN)"
+  exit 1
+fi
+
+# A user-level session prefix would skew the session names; neutralise it.
+unset ZMX_SESSION_PREFIX
+
+# Isolated workdir + no real kitty tab.
+export CR_REVIEW_DIR=$(mktemp -d -t cr-async38.XXXXXX)
+export CR_KITTEN_BIN=/usr/bin/true
 
 repo=$(bash "$(dirname "$0")/setup_repo.sh")
 echo "Test repo: $repo"
 cd "$repo"
 
 cleanup() {
-  [ -n "${sock:-}" ] && [ -n "${session:-}" ] && tmux -S "$sock" kill-session -t "$session" 2>/dev/null || true
-  [ -n "${handle:-}" ] && rm -f "$handle" "$handle.done" "$handle.state" "${sock:-/nonexistent}" 2>/dev/null || true
+  [ -n "${session:-}" ] && "$ZMX" kill "$session" --force >/dev/null 2>&1 || true
+  rm -rf "$CR_REVIEW_DIR" 2>/dev/null || true
 }
 trap cleanup EXIT
 
-handle=$("$LAUNCH" start "" 2>/dev/null)
-[ -n "$handle" ] && [ -f "$handle.state" ] || { echo "FAIL: start failed"; exit 1; }
+handle=$("$LAUNCH" start "" 2>/dev/null) || { echo "FAIL: start command failed"; exit 1; }
+[ -n "$handle" ] && [ -f "$handle.state" ] || { echo "FAIL: start did not produce a handle + state"; exit 1; }
 session=$(sed -n 's/^session=//p' "$handle.state")
-sock=$(sed -n 's/^sock=//p' "$handle.state")
+[ -n "$session" ] || { echo "FAIL: state file has no session= field"; exit 1; }
 sleep 2
 
-# Simulate a crash / forced close: destroy the session with no submit.
-tmux -S "$sock" kill-session -t "$session" 2>/dev/null
+# Simulate a crash / forced kill: destroy the session with no submit.
+"$ZMX" kill "$session" --force >/dev/null 2>&1 || true
 echo "killed the session without submitting"
 
 start=$(date +%s)
@@ -45,7 +55,7 @@ if [ "$rc" != "2" ]; then
 fi
 echo "wait reports aborted (exit 2): PASS"
 
-# The whole point: it must NOT hang to the 5-hour ceiling.
+# The whole point: it must NOT hang to the wait ceiling.
 if [ "$elapsed" -gt 8 ]; then
   echo "FAIL: wait took ${elapsed}s on an aborted review (should return promptly, not hang)"
   exit 1

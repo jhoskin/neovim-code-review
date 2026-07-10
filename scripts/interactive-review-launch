@@ -6,16 +6,14 @@
 # instead of blocking. The caller polls `status <handle>` (one-shot) or runs
 # `wait <handle>` in the background to block until the review finishes.
 #
-# The review runs in a detached tmux session on its own explicit socket. That
-# session is the durable supervisor and the source of truth for state: it
-# outlives this script, the Ghostty window, and even Ghostty itself. The
-# session's existence IS the running/finished state, so:
-#   - closing the review window only DETACHES a client; the session survives and
-#     is reattachable, and `wait` still completes when the review ends;
-#   - if the session is killed without a submit (crash / forced close), `status`
+# The review runs in a detached zmx session. That session is the durable
+# supervisor and the source of truth for state: it outlives this script and the
+# kitty window that displays it. The session's existence IS the running state:
+#   - closing the review window only DETACHES the zmx client; the session
+#     survives, is reattachable (`zmx attach <session>`), and `wait` still
+#     completes when the review ends;
+#   - if the session is killed without a submit (crash / forced kill), `status`
 #     and `wait` detect "aborted" promptly instead of hanging.
-# An explicit `-S` socket gives that durable server a fixed address so every
-# client (this script, the Ghostty window, your own terminal) reaches the same one.
 #
 # Subcommands:
 #   start [<git-range>]      spawn the review; print a HANDLE on stdout, exit 0.
@@ -26,16 +24,15 @@
 #   wait <handle> [interval] block, polling every <interval>s (default 1), until
 #                            the review finishes; same completion semantics as
 #                            status. Intended to be run in the background.
-#   gc                       reap orphaned reviews (sessions/files/sockets left
-#                            by a start that was never reaped). Runs
-#                            automatically before each `start`; also runnable on
-#                            demand or from cron/launchd.
+#   gc                       reap orphaned reviews (sessions/files left by a
+#                            start that was never reaped). Runs automatically
+#                            before each `start`; also runnable on demand.
 #   <git-range> | (nothing)  legacy: start + wait in one blocking call (a
 #                            missing range defaults to HEAD~2..HEAD)
 #
-# When the review reaches a terminal state, the Ghostty window, the tmux session,
-# and the temp files are cleaned up. Anything missed (a start that was never
-# waited on) is reaped by the next `start`'s sweep or an explicit `gc`.
+# When the review reaches a terminal state, the zmx session and the temp files
+# are cleaned up; killing the session closes any kitty window attached to it.
+# Anything missed is reaped by the next `start`'s sweep or an explicit `gc`.
 #
 # Exit codes (status / wait / legacy):
 #   0  submitted (review JSON printed on stdout)
@@ -43,19 +40,22 @@
 #   1  error (diagnostic on stderr)
 #   3  still running (status only)
 #
-# Dependencies: bash, tmux, jq, nvim (+ the neovim-code-review plugin).
-# On macOS the review is surfaced in a new Ghostty window via AppleScript
-# (osascript). If that fails, the script prints the `tmux -S … attach` command
-# to run yourself.
+# Dependencies: bash, zmx, jq, nvim (+ the neovim-code-review plugin).
+# On macOS the review is surfaced as a focused kitty tab via `kitten @` remote
+# control (the review is an interactive handoff the user works in, so it gets
+# a tab, not a background split). If kitty is unreachable, the script prints
+# the `zmx attach` command to run yourself.
 
 set -euo pipefail
 
 RUNNING_RC=3
+ZMX="${CR_ZMX_BIN:-/opt/homebrew/bin/zmx}"
+KITTEN="${CR_KITTEN_BIN:-/Applications/kitty.app/Contents/MacOS/kitten}"
 
-# All per-review artifacts (result file, sentinel, state, tmux socket) live in
-# one fixed directory so a sweep can find them regardless of $TMPDIR. Reviews
-# older than CR_GC_MAX_AGE are reaped (abandoned, or a marathon beyond the wait
-# ceiling); dead sockets are removed. Both are env-overridable.
+# All per-review artifacts (result file, sentinel, state) live in one fixed
+# directory so a sweep can find them regardless of $TMPDIR. Reviews older than
+# CR_GC_MAX_AGE are reaped (abandoned, or a marathon beyond the wait ceiling).
+# Both are env-overridable.
 WORKDIR="${CR_REVIEW_DIR:-/tmp/code-review-launch}"
 GC_MAX_AGE="${CR_GC_MAX_AGE:-21600}" # 6h
 
@@ -91,9 +91,22 @@ resolve_range() {
   printf '' # too few commits / not a git repo -> working-tree review
 }
 
+# The kitty remote-control socket: prefer the exact instance hosting this
+# session (KITTY_PID is exported inside every kitty window), fall back to the
+# newest socket. Empty output means no kitty to talk to.
+kitty_sock() {
+  if [ -n "${KITTY_PID:-}" ] && [ -e "/tmp/kitty-$KITTY_PID" ]; then
+    printf 'unix:/tmp/kitty-%s' "$KITTY_PID"
+    return
+  fi
+  local s
+  s=$(ls -t /tmp/kitty-[0-9]* 2>/dev/null | head -1 || true)
+  [ -n "$s" ] && printf 'unix:%s' "$s"
+}
+
 # Spawn a review. Sets HANDLE (= the result-file path) and writes <handle>.state
-# recording the tmux session and socket. Diagnostics go to stderr; nothing
-# is written to stdout.
+# recording the zmx session name. Diagnostics go to stderr; nothing is written
+# to stdout.
 spawn_review() {
   local range
   range=$(resolve_range "${1:-}")
@@ -104,67 +117,62 @@ spawn_review() {
   gc_sweep # reap orphans from past runs before starting a new review
 
   HANDLE=$(mktemp "$WORKDIR/review.XXXXXX")
-  local base session sentinel sock
+  local base session sentinel
   base=$(basename "$HANDLE")
-  # tmux treats `.` and `:` as target separators, so the session name must not
-  # contain the mktemp suffix's dot; map any non-safe char to `-`.
   session="code-review-${base//[!A-Za-z0-9_]/-}"
   sentinel="$HANDLE.done"
-  # Use a dedicated, explicit tmux socket so the session is created on the SAME
-  # server the attach (Ghostty window, or a manual command) connects to. Without it,
-  # when the launcher runs in an environment whose $TMUX / $TMUX_TMPDIR differs
-  # from the attaching terminal's, the session lands on one server and `tmux
-  # attach` looks at another -> "no sessions". The socket lives in the fixed
-  # WORKDIR so both sides resolve the same path.
-  sock="$WORKDIR/${session}.sock"
 
-  # Neovim needs a real PTY, which Claude Code's Bash tool does not provide, so
-  # run it inside a detached tmux session on our own socket. `env -u TMUX` keeps
-  # it fully decoupled from any tmux the caller is already inside.
-  if ! env -u TMUX tmux -S "$sock" new-session -d -s "$session" -x 220 -y 60 \
-      "NVIM_CODE_REVIEW_RESULT='$HANDLE' nvim -c 'CodeReview $range'; echo \$? > '$sentinel'"; then
-    printf 'interactive-review-launch: failed to start the review session\n' >&2
-    rm -f "$HANDLE"
-    exit 1
-  fi
-
-  # Surface the review in a new Ghostty tab (falling back to a window).
-  # AppleScript is Ghostty's official automation interface. We run the attach via
-  # the surface's `initial input` (typed into a normal login shell) with `exec`,
-  # NOT the `command` property, for two reasons:
-  #   - `command` runs in a bare shell (bash --noprofile --norc) with no Homebrew
-  #     on $PATH, so `tmux` is not found;
-  #   - Ghostty keeps an AppleScript `command`-surface open after the command
-  #     exits (it ignores wait-after-command for these), so the tab would never
-  #     close.
-  # `exec` makes tmux the shell's process, so when the review ends and tmux
-  # detaches the surface closes by ordinary shell-exit. `tmux_bin` is absolute so
-  # it does not depend on the shell's aliases. The login shell has $PATH, so a
-  # plain `tmux` would also resolve, but absolute is unambiguous.
-  local tmux_bin attach
-  tmux_bin=$(command -v tmux || echo tmux)
-  attach="exec $tmux_bin -S $sock attach -t $session"
-  if osascript -e "tell application \"Ghostty\" to new tab in front window with configuration {initial input:\"$attach\r\"}" >/dev/null 2>&1 \
-     || osascript -e "tell application \"Ghostty\" to new window with configuration {initial input:\"$attach\r\"}" >/dev/null 2>&1; then
-    printf 'Review opened in Ghostty (tmux session: %s).\n' "$session" >&2
-  else
-    printf 'Attach to the review with:  tmux -S %s attach -t %s\n' "$sock" "$session" >&2
-  fi
-  printf 'Submit with <leader>Rs, cancel with <leader>Rq.\n' >&2
-
+  # Record the state BEFORE creating the session: every session that ever
+  # exists is then named by a state file from birth, so the age-based gc can
+  # always reap it. Writing state second would leave an unreapable session if
+  # this script died in between (the zmx replacement for the old dead-socket
+  # sweep).
   {
     printf 'started=%s\n' "$(date +%s)"
     printf 'session=%s\n' "$session"
-    printf 'sock=%s\n' "$sock"
   } > "$HANDLE.state"
+
+  # Neovim needs a real PTY, which Claude Code's Bash tool does not provide, so
+  # run it inside a detached zmx session. `zmx run <name> -d` creates the
+  # session (a login shell in the caller's cwd, i.e. the repo) and types the
+  # command at its prompt; the sentinel records nvim's exit code the moment it
+  # exits, independent of any attached viewer. zmx restores the display via
+  # libghostty-vt and passes truecolor through, so no terminal-features
+  # ceremony is needed.
+  if ! "$ZMX" run "$session" -d sh -c "NVIM_CODE_REVIEW_RESULT='$HANDLE' nvim -c 'CodeReview $range'; echo \$? > '$sentinel'" >/dev/null 2>&1; then
+    printf 'interactive-review-launch: failed to start the review session\n' >&2
+    cleanup_review "$HANDLE"
+    exit 1
+  fi
+
+  # Surface the review as a FOCUSED kitty tab: this is an interactive handoff
+  # (the user reviews in nvim), so it takes a tab and takes focus — unlike
+  # background tasks, which surface as --keep-focus splits. Killing the zmx
+  # session later closes the attached tab automatically. If kitty is
+  # unreachable, the session still runs; print the manual attach command.
+  local sock
+  sock=$(kitty_sock)
+  if [ -n "$sock" ] \
+     && "$KITTEN" @ --to "$sock" launch --type=tab --tab-title "review" \
+          "$ZMX" attach "$session" >/dev/null 2>&1; then
+    printf 'Review opened in a kitty tab (zmx session: %s).\n' "$session" >&2
+    # The attach resizes the session PTY, but nvim's screen was restored
+    # from pre-attach geometry and can leave stale rows (e.g. the file
+    # tree's top line) until a full repaint. Nudge it with Ctrl+L once the
+    # resize has settled; harmless if already clean.
+    ( sleep 1; printf '\x0c' | "$ZMX" send "$session" ) >/dev/null 2>&1 &
+  else
+    printf 'Attach to the review with:  zmx attach %s\n' "$session" >&2
+  fi
+  printf 'Submit with <leader>Rs, cancel with <leader>Rq.\n' >&2
 }
 
 # Reap orphaned reviews: anything started more than GC_MAX_AGE ago (abandoned
-# files/sockets, a session never reaped, or a marathon past the wait ceiling),
-# plus dead sockets with no live server. Race-free: a review younger than
-# GC_MAX_AGE is never touched, so an in-flight wait is never undercut.
+# files, a session never reaped, or a marathon past the wait ceiling).
+# Race-free: a review younger than GC_MAX_AGE is never touched, so an in-flight
+# wait is never undercut.
 gc_sweep() {
-  local state handle started now s
+  local state handle started now
   now=$(date +%s)
   for state in "$WORKDIR"/review.*.state; do
     [ -e "$state" ] || continue
@@ -174,52 +182,45 @@ gc_sweep() {
       cleanup_review "$handle"
     fi
   done
-  for s in "$WORKDIR"/*.sock; do
-    [ -e "$s" ] || continue
-    tmux -S "$s" list-sessions >/dev/null 2>&1 || rm -f "$s"
-  done
 }
 
-# Read <handle>.state into STATE_SESSION / STATE_SOCK (empty if absent). Parsed
+# Read <handle>.state into STATE_SESSION (empty if absent). Parsed
 # line-by-line, never sourced.
 read_state() {
   STATE_SESSION=""
-  STATE_SOCK=""
   local k v
   [ -f "$1.state" ] || return 0
   while IFS='=' read -r k v; do
     case "$k" in
       session) STATE_SESSION="$v" ;;
-      sock) STATE_SOCK="$v" ;;
     esac
   done < "$1.state"
 }
 
-# Is the durable review session still alive on its server?
+# Is the durable review session still alive?
 session_alive() {
-  [ -n "$STATE_SOCK" ] && [ -n "$STATE_SESSION" ] \
-    && tmux -S "$STATE_SOCK" has-session -t "$STATE_SESSION" 2>/dev/null
+  [ -n "$STATE_SESSION" ] \
+    && "$ZMX" list --short 2>/dev/null | grep -Fxq "$STATE_SESSION"
 }
 
-# Tear down the review's tmux session and temp files. Idempotent. Killing the
-# tmux session makes the attached `tmux attach` exit; because it was started with
-# `exec` in the Ghostty tab's shell, the tab closes by ordinary shell-exit, so
-# there is no Ghostty surface to close explicitly.
+# Tear down the review's zmx session and temp files. Idempotent. Killing the
+# session terminates any attached client, so a kitty tab showing the review
+# closes by itself; there is no window bookkeeping.
 cleanup_review() {
   local handle="$1"
   read_state "$handle"
-  [ -n "$STATE_SOCK" ] && [ -n "$STATE_SESSION" ] \
-    && tmux -S "$STATE_SOCK" kill-session -t "$STATE_SESSION" 2>/dev/null || true
+  [ -n "$STATE_SESSION" ] \
+    && "$ZMX" kill "$STATE_SESSION" --force >/dev/null 2>&1 || true
   rm -f "$handle" "$handle.done" "$handle.state"
-  [ -n "$STATE_SOCK" ] && rm -f "$STATE_SOCK" || true
 }
 
-# One-shot poll. The durable tmux session is the source of truth for liveness:
+# One-shot poll. The durable zmx session is the source of truth for liveness:
 #   - sentinel present            -> the command recorded an outcome; emit it
 #   - no sentinel, session alive  -> still running (RUNNING_RC)
-#   - no sentinel, session gone   -> aborted: Neovim/the tab was killed without
-#                                    submitting (a closed tab only DETACHES, so
-#                                    this means a real kill/crash, not a close)
+#   - no sentinel, session gone   -> aborted: nvim/the session was killed
+#                                    without submitting (closing the kitty tab
+#                                    only DETACHES, so this means a real
+#                                    kill/crash, not a close)
 # Emits the result (JSON on submit) and cleans up on any terminal state.
 poll_once() {
   local handle="$1" sentinel="$1.done" rc review_path

@@ -108,7 +108,7 @@ No plugin dependencies. The diff renderer is built in (pure Lua +
 ## Bundled scripts
 
 `scripts/interactive-review-launch` is the wrapper the Claude Code
-slash command exec's to hand off to Neovim (tmux session, Ghostty tab,
+slash command exec's to hand off to Neovim (zmx session, kitty tab,
 sentinel polling, exit-code dispatch). See
 [docs/claude-integration.md](docs/claude-integration.md) for the
 install-once-then-forget setup.
@@ -117,7 +117,7 @@ install-once-then-forget setup.
 
 ```bash
 make test          # launch Neovim with the minimal test config
-make test-e2e      # run the tmux-driven end-to-end test suite (25 tests)
+make test-e2e      # run the tmux-driven end-to-end test suite (43 tests)
 make health        # run :checkhealth headless
 ```
 
