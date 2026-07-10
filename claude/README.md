@@ -5,9 +5,9 @@ as a `/interactive-review` slash command, so an agent can hand control to you
 for a review and read your feedback as JSON.
 
 - `commands/interactive-review.md` — the slash command.
-- `../scripts/interactive-review-launch` — the launcher it runs (spawns Neovim
-  in a tmux PTY, opens a Ghostty tab, returns the review JSON, and closes the
-  tab when the review exits).
+- `../scripts/interactive-review-launch` — the launcher it runs (runs Neovim
+  in a detached zmx session, opens a kitty tab, returns the review JSON, and
+  closes the tab when the review exits).
 
 ## Install
 

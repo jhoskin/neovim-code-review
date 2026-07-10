@@ -5,7 +5,7 @@ any tool that can shell out and read files) hand control over to you
 for an interactive review, then read your feedback as structured
 JSON.
 
-This guide assumes you run Claude Code locally in Ghostty,
+This guide assumes you run Claude Code locally in kitty,
 Terminal.app, or another terminal where Neovim can take over the
 screen interactively. Headless and remote scenarios are out of scope.
 
@@ -199,7 +199,7 @@ Hand control to the user for an interactive code review, then read the JSON they
 
 Do not read other files first.
 
-Step 1 — start the review. This returns immediately and prints a HANDLE on stdout (the Ghostty tab opens for the user):
+Step 1 — start the review. This returns immediately and prints a HANDLE on stdout (a focused kitty tab opens for the user; the review lives in a zmx session, so closing the tab does not end it):
 
 ```bash
 ~/.claude/scripts/interactive-review-launch start "${ARGUMENTS:-}"
@@ -218,7 +218,7 @@ It polls every second and exits the moment the user submits or cancels; you are 
 Step 3 — when the background `wait` completes, act on its exit code:
 
 - **0**: parse the printed JSON. Each `files[].lines[]` entry is a comment on `path` at `new_lineno` (or `old_lineno` if `side == "old"`). Summarize the feedback in <=10 lines, then apply the edits. An empty `files` array means the user approved with no comments — acknowledge and stop.
-- **2**: user cancelled. Acknowledge in one line and stop.
+- **2**: cancelled, or aborted (the review ended with no feedback — e.g. the window was closed). Acknowledge in one line and stop.
 - other: print the stderr the command captured, then stop.
 
 `$ARGUMENTS` is an optional git revision range (`HEAD~3..HEAD`, `main...HEAD`, empty for working tree).
@@ -234,22 +234,25 @@ calls, and three exit-code rules means the agent acts almost
 immediately; the launch script is on disk and tested, not regenerated
 each turn.
 
-### Why the script uses tmux
+### Why the script uses zmx
 
 Claude Code's Bash tool does not allocate a controlling TTY for the
 foreground command. Run `nvim` directly and it hangs invisibly: there
 is no TTY for it to render into, and the agent's Bash call just sits
-there until the timeout fires. The bundled script wraps `nvim` in a
-detached `tmux new-session -d`, which gives Neovim its own pseudo-TTY,
-then opens that session in a new Ghostty tab via AppleScript
-(`osascript`, Ghostty's official automation interface). The tab runs
-`exec tmux attach` through the surface's `initial input` (typed into a
-normal login shell), not the `command` property: Ghostty keeps a
-`command`-surface open after the command exits, but a shell that `exec`s
-tmux closes the tab by ordinary shell-exit when the review ends. If
-AppleScript fails (Ghostty not running, or not on macOS) the script
-falls back to printing the `tmux attach -t <session>` command for you to
-run by hand in any terminal pane.
+there until the timeout fires. The bundled script runs `nvim` inside a
+detached `zmx run <name> -d`, which gives Neovim its own pseudo-TTY and
+keeps it alive independent of any viewer. That session is the durable
+supervisor: it outlives the script and the window that shows it. The
+script then surfaces the session as a focused kitty tab with `kitten @
+launch --type=tab`, discovering kitty's remote-control socket from
+`KITTY_PID` or the newest `/tmp/kitty-*`. Closing that tab only
+detaches the zmx client; the session keeps running, and you reattach
+with `zmx attach <session>`. Killing the session closes the attached
+tab by itself. A sentinel file records nvim's exit code the moment it
+exits, so `status` and `wait` see the outcome even when no viewer is
+attached. If kitty is unreachable (not running, or remote control off)
+the script prints the `zmx attach <session>` command for you to run by
+hand in any terminal pane.
 
 ### What the script does
 
@@ -377,10 +380,11 @@ The Bash call runs for several seconds, then exits with no Neovim window
   yet and `:CodeReview` fired before lazy.nvim finished installing it.
   Run `:Lazy install` first, then re-invoke `/interactive-review`.
 
-No new Ghostty tab opens; the script just prints a `tmux attach` line
-: Ghostty AppleScript control failed — Ghostty is not running, or you
-  are not on macOS. Run the printed `tmux attach -t <session>` command
-  yourself in any terminal pane.
+No new kitty tab opens; the script just prints a `zmx attach` line
+: The script found no kitty remote-control socket, or `kitten @`
+  failed. Run the printed `zmx attach <session>` command yourself in
+  any terminal pane, or check that kitty is running with remote control
+  enabled.
 
 `neovim error (exit ...)` and Neovim never appears
 : nvim crashed at startup. Run `nvim --headless +qa` in the same shell
