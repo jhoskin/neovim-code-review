@@ -204,7 +204,7 @@ function M.compute(old_lines, new_lines)
   -- count is 0, start is the line AFTER which the change applies).
   local oi, ni = 1, 1 -- next unprocessed old / new line (1-based)
   for _, h in ipairs(hunks) do
-    local sa, ca, sb, cb = h[1], h[2], h[3], h[4]
+    local sa, ca, _, cb = h[1], h[2], h[3], h[4]
     -- Context before this hunk: old lines [oi .. sa-1] pair with new
     -- lines [ni .. sb-1] one-to-one (equal length by construction).
     local ctx_old_start = oi
