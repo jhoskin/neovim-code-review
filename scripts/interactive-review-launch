@@ -52,11 +52,22 @@ RUNNING_RC=3
 ZMX="${CR_ZMX_BIN:-/opt/homebrew/bin/zmx}"
 KITTEN="${CR_KITTEN_BIN:-/Applications/kitty.app/Contents/MacOS/kitten}"
 
+# Inside a ccd container there is no host zmx/kitty/nvim. IS_SANDBOX is set in
+# every ccd container. In that mode `start` does not spawn anything: it writes
+# a request into the shared /ccd-state/review dir and the ccd dashboard opens
+# the review tab (nvim runs in this container via `container exec`, writing its
+# result and the sentinel back into the same dir). `wait` polls those files.
+SANDBOX="${IS_SANDBOX:-}"
+
 # All per-review artifacts (result file, sentinel, state) live in one fixed
 # directory so a sweep can find them regardless of $TMPDIR. Reviews older than
 # CR_GC_MAX_AGE are reaped (abandoned, or a marathon beyond the wait ceiling).
 # Both are env-overridable.
-WORKDIR="${CR_REVIEW_DIR:-/tmp/code-review-launch}"
+if [ -n "$SANDBOX" ]; then
+  WORKDIR="${CR_REVIEW_DIR:-/ccd-state/review}"
+else
+  WORKDIR="${CR_REVIEW_DIR:-/tmp/code-review-launch}"
+fi
 GC_MAX_AGE="${CR_GC_MAX_AGE:-21600}" # 6h
 
 # Reject git ranges with shell or Vim metacharacters; legitimate revision specs
@@ -121,6 +132,19 @@ spawn_review() {
   base=$(basename "$HANDLE")
   session="code-review-${base//[!A-Za-z0-9_]/-}"
   sentinel="$HANDLE.done"
+
+  if [ -n "$SANDBOX" ]; then
+    # Hand the review to the host: write a request the ccd dashboard consumes.
+    # It opens nvim in this container (via `container exec`) with
+    # NVIM_CODE_REVIEW_RESULT pointing back at $HANDLE, so the result lands
+    # here for poll_once to read. No local zmx/kitty/nvim is touched.
+    printf 'started=%s\nsession=%s\n' "$(date +%s)" "$session" > "$HANDLE.state"
+    printf '{"basename":"%s","range":"%s","cwd":"%s"}\n' "$base" "$range" "$PWD" \
+      > "$WORKDIR/request.json.tmp"
+    mv -f "$WORKDIR/request.json.tmp" "$WORKDIR/request.json"
+    printf 'Review requested; the ccd dashboard is opening it on the host.\n' >&2
+    return
+  fi
 
   # Record the state BEFORE creating the session: every session that ever
   # exists is then named by a state file from birth, so the age-based gc can
@@ -209,9 +233,10 @@ session_alive() {
 cleanup_review() {
   local handle="$1"
   read_state "$handle"
-  [ -n "$STATE_SESSION" ] \
+  # No local zmx session in a sandbox; only the host owns the review tab.
+  [ -z "$SANDBOX" ] && [ -n "$STATE_SESSION" ] \
     && "$ZMX" kill "$STATE_SESSION" --force >/dev/null 2>&1 || true
-  rm -f "$handle" "$handle.done" "$handle.state"
+  rm -f "$handle" "$handle.done" "$handle.state" "$handle.error" "$handle.opened"
 }
 
 # One-shot poll. The durable zmx session is the source of truth for liveness:
@@ -226,7 +251,21 @@ poll_once() {
   local handle="$1" sentinel="$1.done" rc review_path
   read_state "$handle"
 
-  if [ ! -f "$sentinel" ]; then
+  if [ -n "$SANDBOX" ]; then
+    # Liveness comes from the markers ccd writes, not a local zmx session.
+    # nvim's exit code reaches the sentinel via the `container exec` wrapper
+    # (including the VimLeavePre 2 on a close without submit), so an abort is
+    # seen here too.
+    if [ ! -f "$sentinel" ]; then
+      if [ -f "$handle.error" ]; then
+        printf 'review failed to open on the host\n' >&2
+        cleanup_review "$handle"
+        return 1
+      fi
+      # opened-and-running, or the dashboard has not picked it up yet
+      return "$RUNNING_RC"
+    fi
+  elif [ ! -f "$sentinel" ]; then
     if session_alive; then
       return "$RUNNING_RC"
     fi
