@@ -113,6 +113,10 @@ function M.open(diff_info, opts)
   vim.wo[panel_win].relativenumber = false
   vim.wo[panel_win].foldcolumn = "0"
   vim.wo[panel_win].signcolumn = "auto"
+  -- Never wrap the tree: rows are pre-sized to the panel width, so an inherited
+  -- global 'wrap' (or a narrowing from the on-demand sign gutter) would spill a
+  -- row onto the next line and break the tree layout. Truncation, not wrap.
+  vim.wo[panel_win].wrap = false
   -- Panel on the left, slim. Stashed so the panel can size its tree rows and
   -- abbreviate over-long names to the available width (REQ-RND-0013/0014).
   local panel_width = opts.panel_width or 30
@@ -244,10 +248,15 @@ function View:zoom(side)
   self.registry[hide_win] = nil
   pcall(vim.api.nvim_win_hide, hide_win)
   self[hide_side .. "_win"] = nil -- invariant: the hidden side's win field is nil
-  -- Alone on screen, the survivor has no sibling to bind to; let long lines wrap.
+  -- Alone on screen, the survivor has no sibling to bind to; let long lines
+  -- wrap. Indent and mark the wrapped continuations (breakindent + showbreak)
+  -- so they read as part of their diff line, not as text bleeding into the
+  -- file tree beside the pane.
   vim.wo[keep_win].scrollbind = false
   vim.wo[keep_win].cursorbind = false
   vim.wo[keep_win].wrap = true
+  vim.wo[keep_win].breakindent = true
+  vim.wo[keep_win].showbreak = "↳ "
   self.zoomed_side = side
   return true
 end
