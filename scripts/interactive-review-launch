@@ -134,15 +134,18 @@ spawn_review() {
   sentinel="$HANDLE.done"
 
   if [ -n "$SANDBOX" ]; then
-    # Hand the review to the host: write a request the ccd dashboard consumes.
-    # It opens nvim in this container (via `container exec`) with
-    # NVIM_CODE_REVIEW_RESULT pointing back at $HANDLE, so the result lands
-    # here for poll_once to read. No local zmx/kitty/nvim is touched.
+    # Hand the review to the host over the ccd bridge. It opens nvim in this
+    # container (via `container exec`) with NVIM_CODE_REVIEW_RESULT pointing
+    # back at $HANDLE, so the result lands here for poll_once to read. The
+    # bridge call blocks until the tab is up (or fails), so no local
+    # zmx/kitty/nvim is touched.
     printf 'started=%s\nsession=%s\n' "$(date +%s)" "$session" > "$HANDLE.state"
-    printf '{"basename":"%s","range":"%s","cwd":"%s"}\n' "$base" "$range" "$PWD" \
-      > "$WORKDIR/request.json.tmp"
-    mv -f "$WORKDIR/request.json.tmp" "$WORKDIR/request.json"
-    printf 'Review requested; the ccd dashboard is opening it on the host.\n' >&2
+    if ! ccd-bridge review "$base" "$range"; then
+      printf 'review failed to open on the host\n' >&2
+      cleanup_review "$HANDLE"
+      exit 1
+    fi
+    printf 'Review opened on the host.\n' >&2
     return
   fi
 
@@ -252,17 +255,11 @@ poll_once() {
   read_state "$handle"
 
   if [ -n "$SANDBOX" ]; then
-    # Liveness comes from the markers ccd writes, not a local zmx session.
-    # nvim's exit code reaches the sentinel via the `container exec` wrapper
-    # (including the VimLeavePre 2 on a close without submit), so an abort is
-    # seen here too.
+    # The host already confirmed the tab opened (the bridge call in
+    # spawn_review blocked on that). Liveness is just the sentinel: nvim's exit
+    # code reaches it via the `container exec` wrapper (including the
+    # VimLeavePre 2 on a close without submit), so an abort is seen here too.
     if [ ! -f "$sentinel" ]; then
-      if [ -f "$handle.error" ]; then
-        printf 'review failed to open on the host\n' >&2
-        cleanup_review "$handle"
-        return 1
-      fi
-      # opened-and-running, or the dashboard has not picked it up yet
       return "$RUNNING_RC"
     fi
   elif [ ! -f "$sentinel" ]; then
