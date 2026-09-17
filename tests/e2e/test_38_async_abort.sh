@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 # Test 38: failure handling on the zmx contract. If the durable review session
-# is killed without a submit (a crash or forced kill, NOT a tab close -- a tab
-# close only detaches the client), `wait` detects the aborted review and returns
+# is killed without a submit (a crash or forced kill, NOT a window close -- a
+# window close only detaches the client), `wait` detects the aborted review and returns
 # promptly (exit 2) instead of hanging until its timeout.
-# CR_KITTEN_BIN=/usr/bin/true so no real kitty tab opens during the test.
+# CR_KITTEN_BIN=/usr/bin/true so no real kitty window opens during the test.
 set -euo pipefail
 source "$(dirname "$0")/lib.sh"
 
@@ -19,7 +19,7 @@ fi
 # A user-level session prefix would skew the session names; neutralise it.
 unset ZMX_SESSION_PREFIX
 
-# Isolated workdir + no real kitty tab.
+# Isolated workdir + no real kitty window.
 export CR_REVIEW_DIR=$(mktemp -d -t cr-async38.XXXXXX)
 export CR_KITTEN_BIN=/usr/bin/true
 

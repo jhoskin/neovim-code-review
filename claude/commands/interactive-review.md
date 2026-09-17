@@ -8,7 +8,7 @@ Hand control to the user for an interactive code review, then read the JSON they
 
 Do not read other files first.
 
-Step 1 — start the review. This returns immediately and prints a HANDLE on stdout (a focused kitty tab opens for the user; the review lives in a zmx session, so closing the tab does not end it):
+Step 1 — start the review. This returns immediately and prints a HANDLE on stdout (a focused kitty window opens for the user; the review lives in a zmx session, so closing the window does not end it):
 
 ```bash
 ~/.claude/scripts/interactive-review-launch start "${ARGUMENTS:-}"

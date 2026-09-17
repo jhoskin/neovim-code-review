@@ -6,7 +6,7 @@ for a review and read your feedback as JSON.
 
 - `commands/interactive-review.md` — the slash command.
 - `../scripts/interactive-review-launch` — the launcher it runs (runs Neovim
-  in a detached zmx session, opens a kitty tab, returns the review JSON, and
+  in a detached zmx session, opens a kitty window, returns the review JSON, and
   closes the tab when the review exits).
 
 ## Install
