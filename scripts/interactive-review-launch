@@ -41,9 +41,12 @@
 #   3  still running (status only)
 #
 # Dependencies: bash, zmx, jq, nvim (+ the neovim-code-review plugin).
-# On macOS the review is surfaced as a focused kitty tab via `kitten @` remote
-# control (the review is an interactive handoff the user works in, so it gets
-# a tab, not a background split). If kitty is unreachable, the script prints
+# On macOS the review is surfaced as a focused kitty OS window via `kitten @`
+# remote control (the review is an interactive handoff the user works in, so
+# it gets its own window, not a background split or a tab). Its own window
+# also means no tab bar: kitty hides the bar below tab_bar_min_tabs, so a
+# single-tab window gives the review the full width instead of losing a
+# column to a vertical tab bar. If kitty is unreachable, the script prints
 # the `zmx attach` command to run yourself.
 
 set -euo pipefail
@@ -172,17 +175,28 @@ spawn_review() {
     exit 1
   fi
 
-  # Surface the review as a FOCUSED kitty tab: this is an interactive handoff
-  # (the user reviews in nvim), so it takes a tab and takes focus — unlike
-  # background tasks, which surface as --keep-focus splits. Killing the zmx
-  # session later closes the attached tab automatically. If kitty is
-  # unreachable, the session still runs; print the manual attach command.
-  local sock
+  # Surface the review as a FOCUSED kitty OS window: this is an interactive
+  # handoff (the user reviews in nvim), so it takes a window of its own and
+  # takes focus, unlike background tasks, which surface as --keep-focus
+  # splits. A window of its own also keeps the review clear of the tab bar
+  # (kitty hides the bar below tab_bar_min_tabs), which matters most with a
+  # vertical tab bar, where the bar costs a column of width the diff needs.
+  # Killing the zmx session later closes the window automatically. If kitty
+  # is unreachable, the session still runs; print the manual attach command.
+  local sock win
   sock=$(kitty_sock)
   if [ -n "$sock" ] \
-     && "$KITTEN" @ --to "$sock" launch --type=tab --tab-title "review" \
-          "$ZMX" attach "$session" >/dev/null 2>&1; then
-    printf 'Review opened in a kitty tab (zmx session: %s).\n' "$session" >&2
+     && win=$("$KITTEN" @ --to "$sock" launch --type=os-window \
+                --os-window-title "review" --tab-title "review" \
+                "$ZMX" attach "$session" 2>/dev/null); then
+    # `launch` prints the new kitty window id. A new OS window does not
+    # reliably take OS-level focus when it is created by a remote-control call
+    # from a background process (a new TAB always did), so ask for focus
+    # explicitly: the review is a handoff, and the user should land in it.
+    [ -n "$win" ] \
+      && "$KITTEN" @ --to "$sock" focus-window --match "id:$win" >/dev/null 2>&1 \
+      || true
+    printf 'Review opened in a kitty window (zmx session: %s).\n' "$session" >&2
     # The attach resizes the session PTY, but nvim's screen was restored
     # from pre-attach geometry and can leave stale rows (e.g. the file
     # tree's top line) until a full repaint. Nudge it with Ctrl+L once the
@@ -231,8 +245,8 @@ session_alive() {
 }
 
 # Tear down the review's zmx session and temp files. Idempotent. Killing the
-# session terminates any attached client, so a kitty tab showing the review
-# closes by itself; there is no window bookkeeping.
+# session terminates any attached client, so the kitty window showing the
+# review closes by itself; there is no window bookkeeping.
 cleanup_review() {
   local handle="$1"
   read_state "$handle"
@@ -246,8 +260,8 @@ cleanup_review() {
 #   - sentinel present            -> the command recorded an outcome; emit it
 #   - no sentinel, session alive  -> still running (RUNNING_RC)
 #   - no sentinel, session gone   -> aborted: nvim/the session was killed
-#                                    without submitting (closing the kitty tab
-#                                    only DETACHES, so this means a real
+#                                    without submitting (closing the review
+#                                    window only DETACHES, so this means a real
 #                                    kill/crash, not a close)
 # Emits the result (JSON on submit) and cleans up on any terminal state.
 poll_once() {

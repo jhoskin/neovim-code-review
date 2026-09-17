@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
 # Test 37: the launcher's async + durable interface, on the zmx contract.
 # `start` returns a handle without blocking; the review runs in a detached zmx
-# session (the durable supervisor) that survives a closed kitty tab -- a tab
-# close only detaches the client; `status` reports running (exit 3); a cancel
+# session (the durable supervisor) that survives a closed kitty window -- a
+# window close only detaches the client; `status` reports running (exit 3); a cancel
 # driven into the session makes `wait` return cancelled (exit 2); finishing
 # tidies up the session + state/sentinel files.
-# CR_KITTEN_BIN=/usr/bin/true so no real kitty tab opens during the test.
+# CR_KITTEN_BIN=/usr/bin/true so no real kitty window opens during the test.
 set -euo pipefail
 source "$(dirname "$0")/lib.sh"
 
@@ -21,7 +21,7 @@ fi
 # A user-level session prefix would skew the session names; neutralise it.
 unset ZMX_SESSION_PREFIX
 
-# Isolated workdir + no real kitty tab.
+# Isolated workdir + no real kitty window.
 export CR_REVIEW_DIR=$(mktemp -d -t cr-async37.XXXXXX)
 export CR_KITTEN_BIN=/usr/bin/true
 

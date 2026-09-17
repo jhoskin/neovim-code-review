@@ -199,7 +199,7 @@ Hand control to the user for an interactive code review, then read the JSON they
 
 Do not read other files first.
 
-Step 1 — start the review. This returns immediately and prints a HANDLE on stdout (a focused kitty tab opens for the user; the review lives in a zmx session, so closing the tab does not end it):
+Step 1 — start the review. This returns immediately and prints a HANDLE on stdout (a focused kitty window opens for the user; the review lives in a zmx session, so closing the window does not end it):
 
 ```bash
 ~/.claude/scripts/interactive-review-launch start "${ARGUMENTS:-}"
@@ -243,8 +243,8 @@ there until the timeout fires. The bundled script runs `nvim` inside a
 detached `zmx run <name> -d`, which gives Neovim its own pseudo-TTY and
 keeps it alive independent of any viewer. That session is the durable
 supervisor: it outlives the script and the window that shows it. The
-script then surfaces the session as a focused kitty tab with `kitten @
-launch --type=tab`, discovering kitty's remote-control socket from
+script then surfaces the session as a focused kitty OS window with `kitten
+@ launch --type=os-window`, discovering kitty's remote-control socket from
 `KITTY_PID` or the newest `/tmp/kitty-*`. Closing that tab only
 detaches the zmx client; the session keeps running, and you reattach
 with `zmx attach <session>`. Killing the session closes the attached
@@ -380,7 +380,7 @@ The Bash call runs for several seconds, then exits with no Neovim window
   yet and `:CodeReview` fired before lazy.nvim finished installing it.
   Run `:Lazy install` first, then re-invoke `/interactive-review`.
 
-No new kitty tab opens; the script just prints a `zmx attach` line
+No new kitty window opens; the script just prints a `zmx attach` line
 : The script found no kitty remote-control socket, or `kitten @`
   failed. Run the printed `zmx attach <session>` command yourself in
   any terminal pane, or check that kitty is running with remote control
