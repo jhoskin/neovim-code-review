@@ -48,12 +48,30 @@ local function win_valid(win)
   return win ~= nil and vim.api.nvim_win_is_valid(win)
 end
 
--- Lock a diff window: pin its buffer and bind scroll/cursor to its sibling.
-local function lock_diff_win(win)
+-- Lock a diff window: pin its buffer and bind its cursor to its sibling.
+-- Scrolling depends on the mode (REQ-RND-0019):
+--   * wrap: long lines wrap, and render/align.lua keeps the two windows level
+--     by padding the shorter side and copying the scroll position. Neovim's
+--     'scrollbind' is off here: it steps the sibling by buffer lines and loses
+--     count over virtual lines. 'smoothscroll' is off because a partial topline
+--     has no counterpart on the other side, and 'scrolloff' is 0 so Neovim's
+--     cursor margin never fights the align module's snap to a line start.
+--   * no wrap: today's native pair, 'scrollbind' + 'cursorbind'.
+local function lock_diff_win(win, wrap)
   vim.wo[win].winfixbuf = true
-  vim.wo[win].scrollbind = true
   vim.wo[win].cursorbind = true
-  vim.wo[win].wrap = false
+  if wrap then
+    vim.wo[win].scrollbind = false
+    vim.wo[win].wrap = true
+    vim.wo[win].breakindent = true
+    vim.wo[win].showbreak = "↳ "
+    vim.wo[win].smoothscroll = false
+    vim.wo[win].scrolloff = 0
+    vim.wo[win].foldenable = false
+  else
+    vim.wo[win].scrollbind = true
+    vim.wo[win].wrap = false
+  end
   -- Keep line numbers, but trim the rest of the gutter (REQ-RND-0015): absolute
   -- numbers (not LazyVim's relative), a tight number column that auto-grows, no
   -- fold column, and a sign column only when a +/~/- or comment sign is present.
@@ -85,6 +103,9 @@ function M.open(diff_info, opts)
   local self = View.new()
   self.diff_info = diff_info
   self.content_provider = opts.content_provider
+  -- Wrap mode (default on): both diff windows wrap and render/align.lua keeps
+  -- them level. opts.wrap = false is the native no-wrap + scrollbind layout.
+  self.wrap = opts.wrap ~= false
 
   -- Open the layout in its own tabpage so close() can tear the whole thing
   -- down without fighting Neovim's "a tab always keeps one window" rule.
@@ -156,8 +177,8 @@ function M.open(diff_info, opts)
 
   -- Lock both diff windows AFTER their buffers are set (winfixbuf must be set
   -- with the intended buffer already in the window).
-  lock_diff_win(old_win)
-  lock_diff_win(new_win)
+  lock_diff_win(old_win, self.wrap)
+  lock_diff_win(new_win, self.wrap)
 
   -- Register windows.
   self.registry[old_win] = { side = "old", path = first }
@@ -278,16 +299,21 @@ function View:unzoom()
   vim.bo[hid_buf].bufhidden = "wipe"
   if win_valid(surv_win) then
     pcall(vim.api.nvim_win_set_cursor, win, { vim.api.nvim_win_get_cursor(surv_win)[1], 0 })
-    lock_diff_win(surv_win) -- wrap=false, binds back on
+    lock_diff_win(surv_win, self.wrap) -- binds back on (mode-dependent)
   end
-  lock_diff_win(win)
+  lock_diff_win(win, self.wrap)
   self[hidden_side .. "_win"] = win
   self.registry[win] = { side = hidden_side, path = self.path }
   self.zoomed_side = nil
   if win_valid(surv_win) then
-    vim.api.nvim_win_call(surv_win, function()
-      vim.cmd("syncbind")
-    end)
+    -- Native scrollbind needs a syncbind to re-anchor. In wrap mode the
+    -- orchestrator re-equalizes the padding after its repaint and syncs the
+    -- windows through render/align.lua instead.
+    if not self.wrap then
+      vim.api.nvim_win_call(surv_win, function()
+        vim.cmd("syncbind")
+      end)
+    end
     -- Re-spread the diff widths; the panel keeps its slim width via winfixwidth.
     vim.api.nvim_win_call(surv_win, function()
       vim.cmd("wincmd =")

@@ -1,7 +1,9 @@
 #!/usr/bin/env bash
 # Test 42: the tmux-style zoom toggle (<leader>Rz) hides the other diff window,
-# gives the survivor wrap + no scrollbind, restores all three windows on a
-# second press, and stays zoomed across next_file (<leader>Rn).
+# gives the survivor wrap + no cursorbind, restores all three windows on a
+# second press, and stays zoomed across next_file (<leader>Rn). In wrap mode
+# (the default) both diff windows wrap and scrollbind stays off; the align
+# module owns the vertical sync (test_44 checks the rows stay level).
 # Covers: TST-RND-0017
 set -euo pipefail
 source "$(dirname "$0")/lib.sh"
@@ -38,6 +40,7 @@ vim.fn.writefile({
   'cur_buf=' .. vim.api.nvim_buf_get_name(cur),
   'wrap=' .. tostring(new_win and vim.wo[new_win].wrap),
   'scrollbind=' .. tostring(new_win and vim.wo[new_win].scrollbind),
+  'cursorbind=' .. tostring(new_win and vim.wo[new_win].cursorbind),
 }, '/tmp/cr-zoom-on.txt')
 EOF
 
@@ -58,6 +61,7 @@ vim.fn.writefile({
   'nwins=' .. tostring(#wins),
   'wrap=' .. tostring(new_win and vim.wo[new_win].wrap),
   'scrollbind=' .. tostring(new_win and vim.wo[new_win].scrollbind),
+  'cursorbind=' .. tostring(new_win and vim.wo[new_win].cursorbind),
   'old_row=' .. tostring(old_row),
   'new_row=' .. tostring(new_row),
   'old_col=' .. tostring(old_col),
@@ -104,6 +108,7 @@ on_nwins=$(grep '^nwins=' /tmp/cr-zoom-on.txt | cut -d= -f2)
 on_cur=$(grep '^cur_buf=' /tmp/cr-zoom-on.txt | cut -d= -f2-)
 on_wrap=$(grep '^wrap=' /tmp/cr-zoom-on.txt | cut -d= -f2)
 on_scrollbind=$(grep '^scrollbind=' /tmp/cr-zoom-on.txt | cut -d= -f2)
+on_cursorbind=$(grep '^cursorbind=' /tmp/cr-zoom-on.txt | cut -d= -f2)
 
 if [ "$on_nwins" != "2" ]; then
   echo "FAIL: expected 2 review windows when zoomed, got $on_nwins"; exit 1
@@ -118,7 +123,10 @@ fi
 if [ "$on_scrollbind" != "false" ]; then
   echo "FAIL: expected scrollbind=false on the zoomed survivor, got $on_scrollbind"; exit 1
 fi
-echo "zoom in (2 windows, new-side focused, wrap on, scrollbind off): PASS"
+if [ "$on_cursorbind" != "false" ]; then
+  echo "FAIL: expected cursorbind=false on the zoomed survivor, got $on_cursorbind"; exit 1
+fi
+echo "zoom in (2 windows, new-side focused, wrap on, binds off): PASS"
 
 # Zoom out: restore all three windows.
 send_keys "$SESSION" Escape
@@ -137,6 +145,7 @@ echo "--- zoom off ---"; cat /tmp/cr-zoom-off.txt; echo "--- end ---"
 off_nwins=$(grep '^nwins=' /tmp/cr-zoom-off.txt | cut -d= -f2)
 off_wrap=$(grep '^wrap=' /tmp/cr-zoom-off.txt | cut -d= -f2)
 off_scrollbind=$(grep '^scrollbind=' /tmp/cr-zoom-off.txt | cut -d= -f2)
+off_cursorbind=$(grep '^cursorbind=' /tmp/cr-zoom-off.txt | cut -d= -f2)
 off_old_row=$(grep '^old_row=' /tmp/cr-zoom-off.txt | cut -d= -f2)
 off_new_row=$(grep '^new_row=' /tmp/cr-zoom-off.txt | cut -d= -f2)
 off_old_col=$(grep '^old_col=' /tmp/cr-zoom-off.txt | cut -d= -f2)
@@ -145,11 +154,14 @@ off_new_col=$(grep '^new_col=' /tmp/cr-zoom-off.txt | cut -d= -f2)
 if [ "$off_nwins" != "3" ]; then
   echo "FAIL: expected 3 review windows after restore, got $off_nwins"; exit 1
 fi
-if [ "$off_wrap" != "false" ]; then
-  echo "FAIL: expected wrap=false after restore, got $off_wrap"; exit 1
+if [ "$off_wrap" != "true" ]; then
+  echo "FAIL: expected wrap=true after restore (wrap mode), got $off_wrap"; exit 1
 fi
-if [ "$off_scrollbind" != "true" ]; then
-  echo "FAIL: expected scrollbind=true after restore, got $off_scrollbind"; exit 1
+if [ "$off_scrollbind" != "false" ]; then
+  echo "FAIL: expected scrollbind=false after restore (align owns the sync), got $off_scrollbind"; exit 1
+fi
+if [ "$off_cursorbind" != "true" ]; then
+  echo "FAIL: expected cursorbind=true after restore, got $off_cursorbind"; exit 1
 fi
 if [ "$off_old_row" != "$off_new_row" ]; then
   echo "FAIL: expected old/new cursor rows equal after restore, got old=$off_old_row new=$off_new_row"; exit 1
@@ -160,7 +172,7 @@ fi
 if [ "$off_old_col" -ge "$off_new_col" ]; then
   echo "FAIL: expected old window left of new (old_col=$off_old_col < new_col=$off_new_col)"; exit 1
 fi
-echo "zoom out (3 windows, wrap off, scrollbind on, rows aligned, old left of new): PASS"
+echo "zoom out (3 windows, wrap on, cursorbind on, rows aligned, old left of new): PASS"
 
 # Zoom back in, then advance to the next file: zoom must persist.
 send_keys "$SESSION" Escape

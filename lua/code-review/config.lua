@@ -35,6 +35,11 @@ M.defaults = {
   -- deep folder structures; the panel reclaims its gutters (no line numbers) so
   -- most of this is usable text (REQ-RND-0015).
   panel_width = 40,
+  -- Wrap long lines in both diff windows (REQ-RND-0019). The renderer pads the
+  -- other side so rows stay level, and syncs the scroll position itself. Set
+  -- false for the native no-wrap layout (scrollbind; read long lines with the
+  -- zoom toggle).
+  wrap = true,
 }
 
 M.values = vim.deepcopy(M.defaults)

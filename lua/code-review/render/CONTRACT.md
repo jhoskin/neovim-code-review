@@ -64,8 +64,9 @@ Remove: `open` (DiffviewOpen), `get_diff_hunk` (replaced by the model;
 Owns the layout and the two scratch buffers per file.
 
 ```
-open(diff_info) -> view
-  -- builds file panel + old/new windows; renders the first file
+open(diff_info, opts) -> view
+  -- builds file panel + old/new windows; renders the first file.
+  -- opts.wrap (default true) picks the window mode; view.wrap records it
 view:set_path(path)         -- rename buffers + registry + reset cursor (no fill)
 view:show_file(path)        -- set_path + fill from the content provider
 view:close()
@@ -86,9 +87,13 @@ Buffer contract (REQ-RND-0005, spike-verified):
 - `nvim_create_buf(false, true)`, names `code-review://old/<path>` and
   `code-review://new/<path>`, `buftype=nofile`, `buflisted=false`,
   `bufhidden=wipe`, `modifiable=false` after fill.
-- Both diff windows: `winfixbuf=true` (blocks picker swaps — verified),
-  `scrollbind=true` + `cursorbind=true` (line counts equal, so sync is
-  automatic).
+- Both diff windows: `winfixbuf=true` (blocks picker swaps — verified) and
+  `cursorbind=true`. Scrolling depends on `view.wrap` (REQ-RND-0019):
+  - wrap (default): `wrap`, `breakindent`, `showbreak="↳ "`,
+    `smoothscroll=false`, window-local `scrolloff=0`, `scrollbind=false`.
+    `render/align.lua` pads and syncs the windows (see "Align").
+  - no wrap: `wrap=false`, `scrollbind=true` (line counts equal, so the
+    native sync is exact).
 
 Window registry: view maps each window id -> { side, path } so side
 detection is "current win vs registry" (no diffview API).
@@ -103,12 +108,15 @@ Invariants while zoomed:
   are `wipe`, so hiding their only window would wipe them); `unzoom`
   restores `wipe`.
 - The survivor drops `scrollbind`/`cursorbind` and turns `wrap` on, since
-  it has no sibling to bind to.
-- `unzoom` re-applies the full `lock_diff_win` option set (`winfixbuf`,
-  binds, `wrap=false`, gutter) to both windows and copies the survivor's
-  cursor row into the restored window. The restored window is opened with
-  its buffer already in it, so `winfixbuf` holds. If the survivor was
-  closed (`:q`), the restored window anchors on the panel instead.
+  it has no sibling to bind to. The orchestrator drops the wrap padding
+  (`align.clear`) so the survivor reads without blank rows.
+- `unzoom` re-applies the full `lock_diff_win` option set for the view's
+  mode (`winfixbuf`, binds, wrap options, gutter) to both windows and copies
+  the survivor's cursor row into the restored window. The restored window
+  is opened with its buffer already in it, so `winfixbuf` holds. If the
+  survivor was closed (`:q`), the restored window anchors on the panel
+  instead. In no-wrap mode `unzoom` runs `syncbind`; in wrap mode the
+  orchestrator repaints, re-equalizes and syncs through `align`.
 
 Plain syntax while zoomed (REQ-RND-0018): the orchestrator strips diff
 paint from the survivor so treesitter shows through. `init.lua` calls
@@ -143,6 +151,37 @@ Pure helpers + extmark application in two namespaces: diff paint in
   calls it to strip diff paint from the zoomed survivor (REQ-RND-0018).
 - Highlight groups reuse the existing `CodeReview*` groups in
   `config.lua`; add `CodeReviewAdd/Change/Delete` + their sign groups.
+
+## Align (`render/align.lua`)
+
+Keeps the two wrapped diff windows level (REQ-RND-0019). Neovim's
+`scrollbind` cannot: it steps the sibling by buffer lines and every
+virtual line eats a step, so the toplines drift (`:h diff-mode` documents
+the same limit for `wrap`). Namespace `code_review_wrapfill` (`align.NS`),
+augroup `code_review_align`. Every entry point is a no-op unless
+`view.wrap` is set, the view is not zoomed, and both diff windows exist.
+
+- `measure(win) -> text[], fill[]` — per line: screen rows of the line's
+  own text and the virtual rows above it (`nvim_win_text_height`, `all -
+  fill` / `fill`); `fill[n+1]` is the virtual rows below the last line.
+- `equalize(view)` — clears `NS`, measures both windows, pads the side
+  with fewer rows below each line with blank `virt_lines` (a difference
+  above row 1 pads with `virt_lines_above`), and caches the resulting
+  per-window fills. Comment `virt_lines` (NS_COMMENTS) count as rows, so
+  they are mirrored too.
+- `sync(view[, src])` — copies `(topline, topfill)` from `src` (default:
+  the current diff window, else new) to the sibling. Where the cached
+  fills differ at `topline` (one side wraps, the other is padded) a
+  partial fill is snapped to a line start in the direction of travel, and
+  the cursor is kept on screen the way Ctrl-Y does.
+- `attach(view)` / `detach()` — `WinScrolled` → `sync` from the window that
+  scrolled (the current one preferred); `WinResized` → one scheduled
+  `equalize` + `sync` per burst. `clear(view)` drops the padding.
+
+Invariant (asserted by `tests/unit/render_align_spec.lua`): the cumulative
+screen height of lines `1..i` is equal on both sides for every `i`, and
+after a sync both windows show the same `(topline, topfill)` with
+`topfill == 0` wherever the sides' fills differ.
 
 ## Panel (`render/panel.lua`)
 
@@ -190,6 +229,9 @@ cursor_context() -> { path, side = "old"|"new", lineno } | nil
 `switch_file` re-renders the panel so the per-file comment-count markers
 (`store:count_for(path)`) stay current; `repaint_comments` is the cheap
 path the comment layer calls after an add/delete (markers + panel only).
+Every fill and comment repaint, and the unzoom repaint, is followed by
+`align.equalize` + `align.sync`; `open` calls `align.attach`, `close`
+calls `align.detach`, and zoom calls `align.clear` (REQ-RND-0019).
 
 `cursor_context` returns nil when the cursor is on a filler row or in
 the panel. `lineno` is the `old_lineno` or `new_lineno` of the row at
