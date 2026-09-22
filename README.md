@@ -8,7 +8,8 @@ diff lines or files. On exit, the review is persisted as a JSON file and the
 agent reads it to act on your feedback.
 
 The diff is rendered in-plugin (pure Lua on top of `vim.diff`), so there are
-no plugin dependencies.
+no plugin dependencies. Long lines wrap in both diff windows and the two
+sides stay level row for row.
 
 ## How it works
 
@@ -117,7 +118,7 @@ install-once-then-forget setup.
 
 ```bash
 make test          # launch Neovim with the minimal test config
-make test-e2e      # run the tmux-driven end-to-end test suite (43 tests)
+make test-e2e      # run the tmux-driven end-to-end test suite (44 tests)
 make health        # run :checkhealth headless
 ```
 

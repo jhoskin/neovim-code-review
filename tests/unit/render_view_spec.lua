@@ -78,12 +78,33 @@ describe("render/view layout", function()
     v:close()
   end)
 
-  it("diff windows are locked: winfixbuf + scrollbind", function()
+  it("diff windows are locked: winfixbuf + cursorbind, wrap mode syncs itself", function()
     local v = open_view()
+    eq(v.wrap, true, "wrap mode is the default")
     for _, win in ipairs({ v.old_win, v.new_win }) do
       eq(vim.wo[win].winfixbuf, true, "winfixbuf true")
-      eq(vim.wo[win].scrollbind, true, "scrollbind true")
       eq(vim.wo[win].cursorbind, true, "cursorbind true")
+      -- Wrap mode: render/align.lua owns the vertical sync (REQ-RND-0019), so
+      -- Neovim's scrollbind stays off; the options it depends on are pinned.
+      eq(vim.wo[win].wrap, true, "wrap on")
+      eq(vim.wo[win].scrollbind, false, "scrollbind off in wrap mode")
+      eq(vim.wo[win].smoothscroll, false, "smoothscroll off")
+      eq(vim.wo[win].scrolloff, 0, "scrolloff 0 (window-local)")
+      eq(vim.wo[win].breakindent, true, "breakindent on")
+    end
+    v:close()
+  end)
+
+  it("wrap = false keeps the native no-wrap + scrollbind pair", function()
+    local v = view.open(
+      { files = { { path = "a.lua", status = "M" } } },
+      { content_provider = provider, first_file = "a.lua", wrap = false }
+    )
+    eq(v.wrap, false)
+    for _, win in ipairs({ v.old_win, v.new_win }) do
+      eq(vim.wo[win].wrap, false, "wrap off")
+      eq(vim.wo[win].scrollbind, true, "scrollbind on")
+      eq(vim.wo[win].cursorbind, true, "cursorbind on")
     end
     v:close()
   end)
@@ -258,8 +279,8 @@ describe("render/view zoom", function()
     local new_col = vim.api.nvim_win_get_position(v.new_win)[2]
     ok(old_col < new_col, "old is left of new (" .. old_col .. " < " .. new_col .. ")")
     for _, win in ipairs({ v.old_win, v.new_win }) do
-      eq(vim.wo[win].wrap, false, "wrap off after restore")
-      eq(vim.wo[win].scrollbind, true, "scrollbind back on")
+      eq(vim.wo[win].wrap, true, "wrap stays on after restore (wrap mode)")
+      eq(vim.wo[win].scrollbind, false, "scrollbind stays off (align owns the sync)")
       eq(vim.wo[win].cursorbind, true, "cursorbind back on")
       eq(vim.wo[win].winfixbuf, true, "winfixbuf back on")
     end
@@ -399,13 +420,19 @@ describe("render/view zoom", function()
       end
       eq(nreg, nwin, "registry key count matches diff window count @ op " .. i)
 
-      -- Survivor wraps iff zoomed; both diff buffers stay valid.
+      -- Survivor wraps with binds off while zoomed; unzoomed, both windows
+      -- wrap with cursorbind back on (wrap mode). Both diff buffers stay valid.
       if v.zoomed_side then
         local surv = v[v.zoomed_side .. "_win"]
         eq(vim.wo[surv].wrap, true, "survivor wraps while zoomed @ op " .. i)
+        eq(vim.wo[surv].cursorbind, false, "survivor cursorbind off @ op " .. i)
       else
-        eq(vim.wo[v.old_win].wrap, false, "old wrap off when unzoomed @ op " .. i)
-        eq(vim.wo[v.new_win].wrap, false, "new wrap off when unzoomed @ op " .. i)
+        for _, side in ipairs({ "old", "new" }) do
+          local w = v[side .. "_win"]
+          eq(vim.wo[w].wrap, true, side .. " wraps when unzoomed @ op " .. i)
+          eq(vim.wo[w].cursorbind, true, side .. " cursorbind on when unzoomed @ op " .. i)
+          eq(vim.wo[w].scrollbind, false, side .. " scrollbind off when unzoomed @ op " .. i)
+        end
       end
       ok(vim.api.nvim_buf_is_valid(v.old_buf), "old buffer valid @ op " .. i)
       ok(vim.api.nvim_buf_is_valid(v.new_buf), "new buffer valid @ op " .. i)

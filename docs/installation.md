@@ -53,14 +53,22 @@ buffers per file, named `code-review://old/<path>` and
 `codereview-panel`. The diff buffers are `buftype=nofile`,
 `buflisted=false`, `bufhidden=wipe`, and `modifiable=false` after they
 fill. Both diff windows set `winfixbuf=true`, which structurally blocks
-swapping another buffer into a diff window, plus `scrollbind` and
-`cursorbind` so the two sides stay aligned.
+swapping another buffer into a diff window, plus `cursorbind` so the
+cursor moves in step on both sides.
+
+Long lines wrap in both diff windows. Neovim's `scrollbind` cannot keep
+two wrapped windows level (it counts virtual lines as scroll steps and
+drifts; `:h diff-mode` documents the same limit), so the renderer does
+it: it pads the shorter side of every line with blank rows and copies
+the scroll position between the windows itself. Set `wrap = false` in
+`setup()` for the native no-wrap layout with `scrollbind`, where long
+lines are read with the zoom toggle. In wrap mode the diff windows also
+pin `smoothscroll` off and a window-local `scrolloff` of 0.
 
 The zoom toggle (`<leader>Rz`) hides the other diff window so the
-current side takes the full width and turns on `wrap` for its long
-lines; pressing it again restores the old|new layout. While zoomed the
-surviving buffer drops the red/green diff paint so syntax highlighting
-shows through; unzoom restores it.
+current side takes the full width; pressing it again restores the
+old|new layout. While zoomed the surviving buffer drops the red/green
+diff paint so syntax highlighting shows through; unzoom restores it.
 
 Because the diff buffers are `nofile`, no LSP attaches to them. Nothing
 files diagnostics against the transient git blobs, and there is no
@@ -244,6 +252,10 @@ require("code-review").setup({
   -- Sign column markers
   sign_text      = "●",   -- line comments
   file_sign_text = "📄",  -- file comments (on line 1); 2-cell emoji
+  -- Layout
+  panel_width = 40,  -- file-tree panel width in columns
+  wrap = true,       -- wrap long lines in both diff windows, kept level by the
+                     -- renderer; false = native no-wrap layout with scrollbind
 })
 ```
 

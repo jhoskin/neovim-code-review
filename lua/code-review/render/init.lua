@@ -18,6 +18,7 @@ local render_diff = require("code-review.render.diff")
 local view_mod = require("code-review.render.view")
 local panel = require("code-review.render.panel")
 local paint = require("code-review.render.paint")
+local align = require("code-review.render.align")
 local config = require("code-review.config")
 
 local M = {}
@@ -99,6 +100,10 @@ local function render_path(path)
   state.current_path = path
   -- A file switch while zoomed repaints both buffers, so re-clear the survivor.
   apply_zoom_paint()
+  -- Fresh content means fresh wrap heights: re-pad and level the two windows
+  -- (no-op while zoomed or in no-wrap mode; REQ-RND-0019).
+  align.equalize(state.view)
+  align.sync(state.view)
   return model
 end
 
@@ -207,7 +212,11 @@ function M.open(diff_info, store, opts)
   state.view = view_mod.open(diff_info, {
     first_file = first,
     panel_width = config.values.panel_width,
+    wrap = config.values.wrap,
   })
+  -- Watch the diff windows for scrolls and resizes so wrapped rows stay level
+  -- (REQ-RND-0019). No-op in no-wrap mode.
+  align.attach(state.view)
 
   render_panel()
   panel.setup_keymaps(state.view, function(path)
@@ -418,6 +427,9 @@ function M.toggle_zoom()
           pcall(vim.api.nvim_win_set_cursor, win, pos)
         end
       end
+      -- Both windows are back: re-pad for wrap and level them again.
+      align.equalize(v)
+      align.sync(v)
     end
     return
   end
@@ -430,6 +442,9 @@ function M.toggle_zoom()
     side = (model and not side_has_content(model, "new")) and "old" or "new"
   end
   v:zoom(side)
+  -- Alone on screen the survivor needs no padding; drop it so wrapped lines
+  -- read without blank rows between them.
+  align.clear(v)
   -- Clear the freshly zoomed survivor so treesitter reads plainly (REQ-RND-0018).
   apply_zoom_paint()
 end
@@ -443,6 +458,10 @@ function M.repaint_comments()
   end
   local model = model_for(state.current_path)
   paint.apply_comments(state.view, model, state.store, state.current_path)
+  -- Comment blocks are virtual lines on one side; mirror them so the rows
+  -- below stay level (REQ-RND-0019).
+  align.equalize(state.view)
+  align.sync(state.view)
   render_panel()
 end
 
@@ -477,6 +496,7 @@ end
 
 -- Tear down the view and clear all session state.
 function M.close()
+  align.detach()
   if state.view then
     pcall(function()
       state.view:close()

@@ -427,9 +427,21 @@ windows, resolved via `render.current_path()` (valid even when the cursor is in
 the panel), not by parsing a panel line.
 
 **Buffer lifecycle**: the plugin re-renders the two diff buffers when the
-user selects a different file in the panel. Extmarks are re-applied from the
-comment store on (re)creation, with a `BufWinEnter` autocmd as a safety net,
-so comments remain visible even if a buffer is recreated.
+user selects a different file in the panel and re-applies the comment extmarks
+from the store on every fill, so comments stay visible across file switches.
+
+**Wrapped rows**: with `wrap` on (the default), `render/align.lua` keeps the
+two windows level. For every buffer line it pads the side with fewer screen
+rows with blank virtual lines, using `nvim_win_text_height()` for the heights
+so Neovim's own wrap math (breakindent, showbreak, tabs, wide characters,
+signs) is the source of truth; one-sided comment virtual lines are mirrored
+the same way. On every `WinScrolled` it copies the scrolled window's
+`topline`/`topfill` to the sibling, snapping to the nearest line start in the
+direction of travel where one side wraps and the other is padded. Neovim's
+`scrollbind` is off in this mode: it counts virtual lines as scroll steps and
+the two toplines drift (`:h diff-mode` documents the same limit for `wrap`).
+The padding is rebuilt after every buffer fill, comment repaint, unzoom and
+`WinResized`. `cursorbind` stays native.
 
 **Floating windows**: Floating windows (SCR-COMMENT-01, SCR-SUMMARY-01)
 are independent Neovim windows. The renderer's layout is tab-scoped and does
@@ -471,6 +483,10 @@ require("code-review").setup({
     panel_current = { link = "Visual" },
   },
   sign_text = "●",
+  panel_width = 40,
+  -- Wrap long lines in both diff windows; the renderer keeps the sides level.
+  -- false: native no-wrap layout with scrollbind (zoom to read long lines).
+  wrap = true,
 })
 ```
 
@@ -1052,7 +1068,9 @@ re-renders the two diff buffers for that file and `<CR>` on a directory row is a
 no-op.
 
 **REQ-RND-0008** (Ubiquitous): The two diff windows shall keep their scroll
-and cursor positions synchronized.
+and cursor positions synchronized: the cursor via `cursorbind`; the scroll
+position via Neovim's `scrollbind` when `config.values.wrap` is false, and via
+the renderer's fill-aware topline sync (REQ-RND-0019) when it is true.
 
 **REQ-RND-0009** (Event-driven): When the user moves the cursor in a diff
 buffer and adds a comment, the system shall resolve the cursor row to
@@ -1103,10 +1121,10 @@ numeric `[count]`, and keeping both diff windows aligned.
 
 **REQ-RND-0017** (Event-driven): When the user invokes the zoom toggle, the
 system shall hide the other diff window so the current side takes the full width
-while the file panel stays in place, set `wrap` on and `scrollbind`/`cursorbind`
-off for the surviving window, and on a second toggle restore the old|new layout
-with the original window options, the cursor on the same row, and the two sides
-re-synced. Zoom shall persist across file and hunk navigation, swapping to the
+while the file panel stays in place, set `wrap` on and `cursorbind` off for the
+surviving window with the scroll sync suspended (and its wrap padding dropped),
+and on a second toggle restore the old|new layout with the original window
+options, the cursor on the same row, and the two sides re-synced. Zoom shall persist across file and hunk navigation, swapping to the
 other side when the zoomed side has no content in the newly shown file. Invoked
 from the file panel, the toggle shall act on the primary side (the new side; the
 old side for a pure-deletion file) without moving focus.
@@ -1118,6 +1136,21 @@ unobstructed; comment markers shall remain. Unzoom shall restore the full diff
 paint. The plain rendering shall persist across file and hunk navigation while
 zoomed, including when the zoomed side swaps to the other side for a pure
 add/delete file.
+
+**REQ-RND-0019** (Ubiquitous): With `config.values.wrap` true (the default),
+both diff windows shall wrap long lines (`wrap`, `breakindent`, `showbreak`)
+and the renderer shall keep the two sides level row for row: for every buffer
+line it shall pad the side with fewer screen rows with blank virtual lines so
+both sides give the line the same height, measured with
+`nvim_win_text_height()` so one-sided comment virtual lines are mirrored too;
+on every scroll (`WinScrolled`) it shall copy the scrolled window's
+`topline`/`topfill` to the sibling, snapping to the nearest line start in the
+direction of travel where one side wraps and the other is padded; and it shall
+recompute the padding after every buffer fill, comment repaint, unzoom and
+window resize (`WinResized`). In this mode the diff windows set `scrollbind`
+off, `smoothscroll` off and window-local `scrolloff` 0. With
+`config.values.wrap` false the diff windows shall keep the native no-wrap
+layout with `scrollbind` on.
 
 ## 7. Verification Matrix
 
@@ -1188,7 +1221,7 @@ add/delete file.
 | REQ-RND-0005  | TST-RND-0005  | Auto     | Render a diff buffer, verify `buftype=nofile`, `buflisted=false`, `bufhidden=wipe`, `modifiable=false`, and window `winfixbuf=true` |
 | REQ-RND-0006  | TST-RND-0006  | Auto     | Render a diff with added/changed/deleted lines, verify gutter sign extmarks are present on the corresponding rows |
 | REQ-RND-0007  | TST-RND-0007  | Manual   | Open the file panel, verify changed files render as an indented directory tree with file rows showing basename + M/A/D + comment-count; press `<CR>` on a file row, verify the two diff buffers re-render; `<CR>` on a directory row does nothing |
-| REQ-RND-0008  | TST-RND-0008  | Manual   | Scroll and move the cursor in one diff window, verify the other window stays in sync |
+| REQ-RND-0008  | TST-RND-0008  | Manual   | Scroll and move the cursor in one diff window, verify the other window stays in sync (wrap mode is covered by TST-RND-0019; check the no-wrap `scrollbind` layout with `wrap = false`) |
 | REQ-RND-0009  | TST-RND-0009  | Auto     | Place the cursor on a known diff row and add a comment, verify the resolved `{path, side, lineno}` matches the row→line mapping |
 | REQ-RND-0010  | TST-RND-0010  | Auto     | Invoke next/previous-file navigation, verify the current file advances (wrapping) and focus moves into the new-side window (old side for a pure-deletion file) |
 | REQ-RND-0011  | TST-RND-0011  | Auto     | Switch files, verify exactly one panel row carries a `CodeReviewPanelCurrent` extmark (the current file) and the panel cursor sits on it |
@@ -1197,8 +1230,9 @@ add/delete file.
 | REQ-RND-0014  | TST-RND-0014  | Auto     | Set config.values.panel_width and open a review; verify the panel window width equals the configured value |
 | REQ-RND-0015  | TST-RND-0015  | Auto     | Open a review; verify the panel window has no number/fold column and signcolumn auto, and each diff window has number on, relativenumber off, foldcolumn 0, signcolumn auto, and a tight numberwidth |
 | REQ-RND-0016  | TST-RND-0016  | Auto     | On a file with multiple hunks, from a known cursor row invoke next-change/previous-change; verify the cursor lands on the expected hunk-start row, wraps within the file, honors a count, and leaves both diff windows on the same row |
-| REQ-RND-0017  | TST-RND-0017  | Auto     | Invoke the zoom toggle in a diff window; verify the other diff window is hidden, the panel stays, the surviving window has wrap on and scrollbind/cursorbind off; toggle again and verify the two-window layout, window options, cursor row, and scroll sync are restored; navigate files to verify zoom persists and swaps sides when the zoomed side is empty; from the panel verify it zooms the primary side without moving focus |
+| REQ-RND-0017  | TST-RND-0017  | Auto     | Invoke the zoom toggle in a diff window; verify the other diff window is hidden, the panel stays, the surviving window has wrap on and cursorbind off; toggle again and verify the two-window layout, window options, cursor row, and scroll sync are restored; navigate files to verify zoom persists and swaps sides when the zoomed side is empty; from the panel verify it zooms the primary side without moving focus |
 | REQ-RND-0018  | TST-RND-0018  | Auto     | Zoom a file that has diff paint; verify the surviving buffer's diff namespace has no extmarks while comment markers stay; navigate to the next file while zoomed and verify it too has no diff decorations; unzoom and verify the diff paint returns |
+| REQ-RND-0019  | TST-RND-0019  | Auto     | Open a review on a file with long lines on both sides (wrap on); verify both diff windows wrap, the cumulative screen height of lines 1..i is equal on both sides for every i, and after each of a set of scroll commands (zt/zz/zb, Ctrl-E/Y/D/U/F/B, j/k walks, G/gg) both windows show the same topline/topfill; a one-sided comment block is mirrored; a width change re-pads; on the real screen (tmux) the number columns of the two windows match row for row through key-driven scrolls, a resize and a zoom round-trip |
 | REQ-LSP-0002  | TST-LSP-0002  | Auto     | Open the comment float and summary float, verify both have filetype `codereview` (covered by `test_12_float_filetype.sh`) |
 | REQ-LSP-0003  | TST-LSP-0003  | Auto     | Open the comment float, verify no LSPs are attached after the filetype is set |
 | REQ-RND-0005  | TST-LSP-0001  | Auto     | Start a review whose diff includes a `.md` file; assert no LSP client is attached to either diff buffer (consequence of `buftype=nofile`) |
