@@ -10,9 +10,10 @@ trap "cleanup_session $SESSION" EXIT
 repo=$(bash "$(dirname "$0")/setup_repo.sh")
 echo "Test repo: $repo"
 
-# Custom init: disable add_comment and delete_comment, keep others
-cat > /tmp/cr-disable-init.lua <<'EOF'
-local plugin = "/Users/joh/dev/neovim-code-review"
+# Custom init: disable add_comment and delete_comment, keep others. The
+# heredoc expands $PLUGIN_ROOT (from lib.sh) so the test runs from any checkout.
+cat > /tmp/cr-disable-init.lua <<EOF
+local plugin = "$PLUGIN_ROOT"
 
 vim.opt.runtimepath:prepend(plugin)
 vim.opt.swapfile = false
